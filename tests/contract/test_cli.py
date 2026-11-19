@@ -83,3 +83,13 @@ def test_an_unreachable_database_is_a_message_not_a_traceback(
     assert result.exit_code == 1
     assert "cannot connect to PostgreSQL" in result.stderr
     assert "Traceback" not in result.output
+
+
+def test_stats_prints_semantic_hits(env: str, store: PgStore) -> None:
+    store.count(NOW.date(), "acme", "answer", "hit")
+    store.count(NOW.date(), "acme", "answer", "hit_semantic")
+    store.count(NOW.date(), "acme", "answer", "hit_semantic")
+    result = runner.invoke(app, ["stats", "--scope", "acme"])
+    assert result.exit_code == 0, result.output
+    [line] = result.output.strip().splitlines()
+    assert "hits 1" in line and "semantic_hits 2" in line and "hit_rate 1.00" in line

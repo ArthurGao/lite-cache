@@ -252,3 +252,21 @@ def test_a_refresh_writes_the_vector(setup: Setup) -> None:
     assert ask(model, PARAPHRASE).cached
     assert len(up.requests) == 1
     assert embedder.calls == [SAME, PARAPHRASE]
+
+
+def test_a_failed_call_keeps_no_vector(store: PgStore) -> None:
+    # A call that fails after its L2 lookup never reaches after(): its remembered vector must go
+    # when the call does, not after 1024 later calls (final review of S3).
+    import gc
+
+    up = Upstream((500, {"error": "down"}))
+    model = local_model(up)
+    hook = CacheHook(store, clock=Clock(), embedder=FakeEmbedder(), thresholds=THRESHOLDS)
+    model.hooks.register(hook)
+    try:
+        ask(model, SAME)
+    except Exception:
+        pass
+    gc.collect()
+    assert len(up.requests) >= 1
+    assert len(hook._vectors) == 0
