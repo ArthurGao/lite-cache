@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：设计完成，S0 未开始（2026-11-15）；2026-11-19 按 lite-model 改写接入方式（§0）。** 这是唯一记录项目状态的地方。本文是唯一的设计来源；
+**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），下一步 S1.5（发布 wheel）。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -10,12 +10,12 @@
 | 日期 | 决策 | 原因 |
 | --- | --- | --- |
 | 2026-11-15 | 形态：library；HTTP 服务和代理按需做（§7） | 与 lite-rag / lite-mem 一致；现有接入方全是 Python |
-| 2026-11-15 | 第一个接入方：lite-rag `ask()` | 重复问题最可能出现在问答 |
+| 2026-11-15 | 第一个接入方：lite-rag `ask()`（2026-11-19 被取代：建索引和 `ask()` 两条路径，见下） | 重复问题最可能出现在问答 |
 | 2026-11-15 | 语义匹配只在应用层做，透明代理只做 L1 | 代理分不清用户问题和注入的 RAG 上下文 |
 | 2026-11-15 | provider prompt caching 不在范围内 | 它属于 client / gateway 配置；KB 实测它只在多轮长上下文里生效（`KB/global/llm-evals/evals/2026-10-05-tenderted-prompt-caching.md`） |
 | 2026-11-15 | 不挂在 llm-steward 上 | steward 自己的 `kb.*` / `memory.*` role 会调 LLM，但它不替其它应用转发 LLM 调用（没有 completions 路由），也不记 token |
 | 2026-11-15 | 不重复造轮子（"运行时不 import 兄弟项目"一句已被 2026-11-19 的"依赖 lite-model"取代）：canonical JSON 照搬 lite-eval `canonical.py`；migration 运行器逐字 vendor lite-rag `db.py`（e42fc93）；schema 校验照搬 lite-mem（标识符约束加保留名拒绝，§5）；Embedder 由调用方注入，lite-cache 不做 embedding 缓存 | 运行时不 import 兄弟项目：lite-rag 在 S4 要依赖 lite-cache，反过来就成了循环依赖；为了 30 行 canonical JSON 把 lite-eval（带 Viewer 的 wheel）拉进运行时依赖不划算。lite-eval 只作为 `eval` extra 和 dev 依赖用于评测（S2 起），与 lite-rag、lite-mem 的用法相同。vendor 的文件头注明来源和 commit，并用 test vector 和来源比对 |
-| 2026-11-15 | 先做 L1 和 eval 基线（S1、S2）；L2 等回放数据证明值得再做（S3） | 重复率低的流量里，L1 可能就够了 |
+| 2026-11-15 | 先做 L1 和 eval 基线（S1、S2）；L2 等回放数据证明值得再做（S3）（2026-11-19 被取代：L2 先用问题对评测校准，见下） | 重复率低的流量里，L1 可能就够了 |
 | 2026-11-15 | 缓存不解读内容：payload 不透明，校验由调用方的 `call()` 负责（2026-11-19 起由 lite-model 负责：截断、空回复、不合 schema 都是异常），写入规则是可替换的谓词 | lite-mem / llm-steward 返回结构化对象或 tool 输入，`finish_reason` 和带日期的模型快照名因 provider 而异 |
 | 2026-11-15 | 已付费调用之后的写入失败不让请求失败；读失败才抛错 | 不能丢掉已经付过钱的答案；错误通过返回值和日志暴露 |
 | 2026-11-15 | S1 只做 PostgreSQL | 同级项目默认用 PG，L2 需要 pgvector；先不维护两个后端 |
@@ -27,6 +27,15 @@
 | 2026-11-19 | 不做自己的 HTTP 代理（§7） | LiteLLM Proxy 已是可选的 OpenAI 兼容入口；非 Python 的接入方用它（不带本缓存） |
 | 2026-11-19 | 失败的调用不计数，`skip:<reason>` 只来自 `accept` 谓词 | hook 看不到失败的调用（lite-model 不加 `failed()` hook，见它的 §15）；失败调用的用量在 lite-model 的异常上 |
 | 2026-11-19 | 评测绕过缓存（不传 policy 或 `refresh=True`） | 多次 trial 必须各自调用模型，缓存会让第 2 次复用第 1 次的答案，看不到波动（KB 方法论 §4） |
+| 2026-11-19 | L1 的接入方是 lite-rag 的两条路径：建索引的 `contextual` / `graph` role 和 `ask()` 的 `answer` role（S2）；L2 只给 `ask()`（S4） | 建索引是固定流程：同一批 chunk 重新入库、换一个与切块无关的配置重建、eval 多次跑同样的切块，发出的请求完全相同，L1 命中率高且不会答错；`ask()` 是用户问答，L1 只在问题和检索结果都相同时命中，L2 的价值在这里（用户选"两个都接"） |
+| 2026-11-19 | 需要 L2；L2 不等回放数据，先用问题对评测校准阈值和 guard，过 gate 即可上线（默认关）；回放评测改为按需，有真实日志时再估算收益 | 误命中率（安全性）能用标注好的问题对测出来；真实收益取决于真实流量里的重复分布，模拟数据给不出来，只能等日志（用户要求 L2） |
+| 2026-11-19 | 建索引的 role 只用 L1，scope 为 `literag/<namespace>/<kb 名>` | 索引身份要求可复现，相似不等于相同；按前缀可以单独清除一个 kb 的条目。namespace 是 lite-rag 的租户边界（`engine.py` 文档头），两个 namespace 的同名 kb 不能共用 scope（builder check） |
+| 2026-11-19 | L2 必须显式打开：`Policy(semantic=True)`，并且 context 里同时有 `question` 和 `partition`；只给 `question` 不触发 L2 | `question` 在 L1 里也会传（排查、管理界面），不能因为传了原文就承担误命中的风险 |
+| 2026-11-19 | 阈值按 embedder 校准：一个阈值只对校准它的 embedder（`model_id`）有效，配置里没有该 embedder 的阈值时，`semantic=True` 在启动时报错 | 不同 embedding 模型的相似度分布不同，一个模型的阈值套在另一个上没有意义；失败要在启动时可见 |
+| 2026-11-19 | 分区内精确检索（余弦），不建 ANN 索引 | 分区由参与回答的文档版本算出，一个分区里的条目很少；按 `(scope, partition, embedder)` 的 btree 过滤后逐行算相似度足够，也省掉了不同维度的 HNSW 索引；分区变大时再加 |
+| 2026-11-19 | `ask()` 的 L2 partition 是"送进模型的上下文完全相同"：检索结果**按顺序**的 `chunk_id@content_hash` 列表的 sha256；同样的 chunk 换了顺序也不命中（方案 A）。问题日志和 `stats` 显示"同样的 chunk、不同顺序"多时，再改为方案 B（同一组 chunk、命中时按当前顺序重排引用编号） | `ask()` 的回答带 `[n]` 引用，编号指向本次检索的 chunk 列表（`answer.py` `check_citations`）；L2 命中返回的是另一个问题的答案，只有上下文完全相同，引用和依据才都对。按 kb 版本分区（方案 C）会让答案引用这次没检索到的 chunk，否决。代价是命中少，所以 L1、L2 命中率分开统计，日志记下 partition，真实使用中看得到 L2 有没有用（用户 2026-11-19 选 A） |
+| 2026-11-19 | lite-rag 以 release wheel 依赖 lite-cache（`cache` extra） | 与 lite-model、lite-eval 的依赖方式一致（workspace `AGENTS.md` "How pins work"） |
+| 2026-11-19 | 接入 lite-rag 不等 lite-model 0.3.0 | 建索引经过 `Bounded`：命中也占一个槽位，但立刻返回，吞吐几乎不变；`ask()` 不经过 `Bounded`。0.3.0 只是 llm-steward（async）接入的前置 |
 
 ## 1. 概述
 
@@ -34,8 +43,9 @@ LLM 调用的响应缓存：同一个问题再次出现时，直接返回上次�
 从 S3 起也能命中。
 
 - **L1 精确缓存**：同一请求只调用一次模型。请求相同指 scope、role、model、messages、params 都相同。
-- **L2 语义缓存（S3）**：调用方明确给出问题和分区，在分区内按问题向量的相似度命中。阈值由
-  lite-eval 在标注好的问题对上校准，用 gate 守住误命中率。
+- **L2 语义缓存（S3）**：调用方显式打开（`Policy(semantic=True)`）并给出问题和分区，在分区内按问题向量
+  的相似度命中，再过 guard（数字、否定、实体）。阈值按 embedder 由 lite-eval 在标注好的问题对上校准，用
+  gate 守住误命中率（§8）。
 - **可度量**：按天、scope、role 汇总命中、未命中和省下的 token。
 - **可失效**：TTL、按 scope 或 role 清除、按 key 驱逐（例如用户点踩）、refresh。
 
@@ -52,7 +62,9 @@ LLM 调用的响应缓存：同一个问题再次出现时，直接返回上次�
      2. key = sha256(canonical(…))（§3.1）
      3. refresh 为假时 store.get(key, now)：条目存在且未过期 → 计 hit，返回当初的回复
         （lite-model 标 cached=True，来源仍是当初回答的模型）
-     4. [S3] L1 未命中且 context 带了 question 和 partition → 在分区内做 ANN → 阈值 → guard → hit
+     4. [S3] L1 未命中、policy.semantic 为真、context 带了 question 和 partition →
+        embed(question) → 在 (scope, partition, embedder) 内逐行算余弦 → 最高者 ≥ 该 embedder 的阈值
+        → guard 通过 → 计 hit_semantic，返回那条的回复；否则把向量留给 after 写入时用（不 embed 第二次）
    lite-model 发请求；截断、空回复、不合 schema、调用失败都抛异常：不经过 after，不写、不计数
    CacheHook.after(call, reply)
      5. policy.accept(reply)：None → 写入并计 stored（同一个事务）；否则计 skip:<reason>
@@ -61,8 +73,10 @@ LLM 调用的响应缓存：同一个问题再次出现时，直接返回上次�
 ## 3. 接口
 
 ```python
-Policy(ttl_s=None, accept=None, refresh=False)   # accept(reply) -> str | None；None = 全部写入
-CacheHook(store, clock=…)                         # lite_model.hooks.Hook，name "lite-cache"
+Policy(ttl_s=None, accept=None, refresh=False,   # accept(reply) -> str | None；None = 全部写入
+       semantic=False)                            # S3：True 才走 L2（§0）
+CacheHook(store, clock=…, embedder=None)          # lite_model.hooks.Hook，name "lite-cache"；
+                                                  # S3：embedder 由调用方注入（Embedder Protocol）
 model.hooks.register(CacheHook(open_store()))     # model = lite_model.build(…)（LiteModel）
 with call_context(scope="acme/u42", cache=Policy(ttl_s=86_400),
                   question="手冲咖啡的粉水比？",     # 可选，存进 entries.question，不进 key
@@ -74,6 +88,8 @@ hook.store_errors -> int                          # 写或计数失败的次数�
 open_store(settings=None) -> Store
 ```
 
+- **`cache` 的取值**：`Policy`，或 `True`（等于 `Policy()`，lite-model 的文档和示例用的是 `cache=True`）；其它
+  类型（包括 `False` 以外的真值）抛 `TypeError`，`False` / 不传等于不缓存。
 - **缓存与否由调用点决定**：`call_context` 里没有 `cache`（一个 `Policy`）就不走缓存，没有 `scope` 也
   不走（以防跨租户，lite-model §15）。role 只是 key 的一部分，也是统计维度，不查注册表。
 - **`question`** 是可选的用户问题原文，通常几十个字，不是整个请求。它存进 `entries.question`，用于排查、
@@ -84,6 +100,16 @@ open_store(settings=None) -> Store
   JSON schema 没变）当作未命中，记 warning，照常调用并覆盖。
 - **出处**：命中时返回的回复带当初的 `Provenance`（实际回答的模型）和 `Usage`（这次省下的，lite-model §9），
   `cached=True`；`entries.created_at` 是写入时间。UI 必须标注"缓存答案"。
+- **L2（S3）**：`semantic=True` 但缺 `question` 或 `partition` 时只走 L1，不报错（与"没有 policy 不缓存"同理，
+  由调用点决定）；`semantic=True` 而 hook 没有 embedder，或配置里没有这个 embedder 的阈值，在注册 / 第一次调用
+  前就报 `ConfigError`（§0）。L2 命中返回的是另一个（相似）问题的答案：`cached=True`、来源和 usage 是那条的，
+  统计里记为 `hit_semantic`，与 L1 的 `hit` 分开（§3.4）。被命中的那条的 `question` 写进 warning 级以下的日志，
+  便于排查误命中。
+- **Embedder Protocol（S3）**：`model_id: str`、`dim: int`、`embed_query(text) -> list[float]`。`model_id` 必须
+  涵盖一切会改变向量的东西：provider、模型、**query 前缀**（lite-rag 把 prefixes 算进索引身份）；阈值按它
+  查（§5）。lite-rag 的 `Embedder` 没有 `model_id`（有 `provider`、`model`、`dim`、`prefixes`，
+  `embedding.py:36-54`），所以由 lite-rag 在 S4 提供一个包住 `CachingEmbedder` 的 adapter，把
+  `provider/model` 和 query 前缀的 hash 拼成 `model_id`。lite-cache 不缓存 embedding。
 - **宿主要暴露注册入口**：lite-rag 的 `build_model` 返回类型是 `Model`（不含 `.hooks`），lite-mem、
   llm-steward 包在自己的 adapter 里；接入时各自开一个注册 hook 的口子（§9）。
 
@@ -95,7 +121,8 @@ NFC 只合并 Unicode 意义上等价的写法，不改变语义。内容为：
 
 `{"v": 2, scope, role, backend, model, messages, params}`
 
-- **scope 必填**，格式 `project[/tenant[/user]]`，每段为 `[A-Za-z0-9_.-]+`。不同 scope 永远不共享
+- **scope 必填**，格式是一段或多段、用 `/` 分隔，每段为 `[A-Za-z0-9_.-]+`，从粗到细（项目、租户 / namespace、
+  kb、用户……；lite-rag 的 namespace 本身含 `/`，所以段数不固定）。不同 scope 永远不共享
   答案，以防跨租户泄露。注入了 lite-mem 记忆的个性化回答，scope 必须细到 user。
 - **backend、model** 取自 `Call.target`：配置里的 backend 名字和**请求的**模型（lite-model 统一为
   `backend:model`；两个 OpenAI 兼容厂商的同名模型不会撞）。role 换了模型后，旧条目自然不再命中。
@@ -140,12 +167,13 @@ upsert 用 `INSERT … ON CONFLICT DO UPDATE SET n = stats.n + 1 …`，并发�
 
 | outcome | 含义 | 累加 | 事务 |
 | --- | --- | --- | --- |
-| `hit` | 从缓存返回 | saved_* += 条目原始 usage | 只有计数这一次写 |
+| `hit` | L1 从缓存返回 | saved_* += 条目原始 usage | 只有计数这一次写 |
+| `hit_semantic` | L2 从缓存返回（S3） | saved_* += 那条的原始 usage | 只有计数这一次写 |
 | `stored` | 调了模型并写入了缓存（含 refresh） | spent_* += 本次 usage | 写条目和计数在同一个事务 |
 | `skip:<reason>` | 调了模型，`accept` 拒绝 | spent_* += 本次 usage | 只有计数这一次写 |
 
 - 调用失败（lite-model 抛异常）时不计数：hook 看不到失败的调用；它的用量在异常的 `usage` 上（lite-model §9）。
-- `hit_rate = hit / (hit + stored + skip:*)`；`stats()` 按 role 汇总，同时给出各 skip 原因的次数。
+- `hit_rate = (hit + hit_semantic) / (hit + hit_semantic + stored + skip:*)`，L1、L2 各自的命中率也分开给出；`stats()` 按 role 汇总，同时给出各 skip 原因的次数。
 - 表的大小由天数、scope 数、role 数、outcome 数决定，不会随请求量无界增长。
 
 S2 的 replay 评测需要的是查询日志，那是调用方的日志，不由本表提供。
@@ -162,11 +190,15 @@ S2 的 replay 评测需要的是查询日志，那是调用方的日志，不由
 
 ## 4. 存储
 
-`Store` Protocol：`get(key, now)`、`put(entry, now)`、`invalidate(...)`、`purge_expired(now, limit)`、
-`count(...)`、`stats(...)`。
+`Store` Protocol 只含 hook 用到的：`get(key, now)`、`put_and_count(entry, now, day, spent=)`（`stored` 的写入和计数
+同一事务）、`count(...)`、`invalidate(...)`、`stats(...)`。`PgStore` 另有 `put(entry, now)` 和 `purge_expired(now, limit)`
+（CLI 和工具用）。写入后顺手 purge，purge 失败只记 warning，不让已提交的写入报失败。
 
 PostgreSQL 实现：
-- schema 默认 `lite_cache`；migrations 是编号的 SQL 文件；执行时 `search_path = <schema>, public`。
+- schema 默认 `lite_cache`；migrations 是编号的 SQL 文件；执行时 `search_path = <schema>, public`。连接池里每个连接
+  建立时设一次 `search_path`（pool 的 `configure`），不在每个事务里 `SET LOCAL`：每次查缓存少一次往返（S1）。
+  连接 autocommit，单条语句一次往返；连接池最多 8 个连接，取连接最多等 5 s（数据库在启动后断开时很快报
+  `StoreError`，而不是每次调用都等 30 s）。
   migration 运行器是逐字 vendor 过来的 lite-rag `db.py`（§0）。
 - `open_store()` 先不加锁地查已应用的最新版本，落后时才拿 advisory lock 执行 migrate。每个进程只
   open 一次。
@@ -178,7 +210,10 @@ PostgreSQL 实现：
   - `stats(day, scope, role, outcome, n, saved_*_tokens, spent_*_tokens)`，主键为
     `(day, scope, role, outcome)`，口径见 §3.4。
 - 不存完整请求：key 已经是请求的 hash，再存一份 RAG 上下文只会让表膨胀。只存调用方给出的
-  `question`（§3）。L2 需要的 `partition` 和问题向量在 S3 加。
+  `question`（§3）。
+- S3 在 `entries` 上加列（新的 migration）：`partition text NULL`、`embedder text NULL`（`model_id`）、
+  `question_embedding vector NULL`（不定维度，pgvector 允许；不建 HNSW，§0）；加 btree 索引
+  `(scope, partition, embedder)`，scope 同样用 C collation。只有 `semantic=True` 且三者齐全的写入才填这三列。
 
 SQLite 后端以后按需再加，复用同一套 contract 测试。
 
@@ -189,8 +224,10 @@ SQLite 后端以后按需再加，复用同一套 contract 测试。
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `LITECACHE_DATABASE_URL` | — | 必填 |
-| `LITECACHE_SCHEMA` | `lite_cache` | 两条校验都要有：标识符正则 `^[a-z_][a-z0-9_]{0,62}$`；不能是 `public`、`information_schema` 或 `pg_*`。后一条照搬 lite-mem `own_schema`，前一条在 lite-mem 里是另一个 pydantic 约束，也一起照搬。字段名写成 `schema_name`，alias 为 `schema`（同 lite-rag），以免遮蔽 pydantic 的同名属性 |
+| `LITECACHE_SCHEMA` | `lite_cache` | 两条校验都要有：标识符正则 `^[a-z_][a-z0-9_]{0,62}$`；不能是 `public`、`information_schema` 或 `pg_*`。后一条照搬 lite-mem `own_schema`，前一条在 lite-mem 里是另一个 pydantic 约束，也一起照搬。字段名写成 `schema_name`（以免遮蔽 pydantic 的同名属性），只从 `LITECACHE_SCHEMA` 读（`validation_alias`）。不用 lite-rag 的 `alias="schema"`：在顶层 `BaseSettings` 上，pydantic-settings 会从不带前缀的 `SCHEMA` 读它、反而读不到 `LITECACHE_SCHEMA`（S0 实测） |
 | `LITECACHE_TEST_DATABASE_URL` | — | 只给测试用，测试只使用 schema `lite_cache_test` |
+
+| `LITECACHE_SEMANTIC_THRESHOLDS` | 空 | S3：JSON 对象 `{embedder model_id: threshold}`；值只能来自 §8 的校准运行，旁边在 `kb/eval-results.md` 记着 run id。仓库里的默认值文件 `src/lite_cache/thresholds.json` 收已校准的条目，环境变量覆盖它 |
 
 policy 不放进环境变量，它们是代码里的决定（§3）。
 
@@ -207,28 +244,37 @@ Proxy），不带本缓存。**Proxy 的 cache 保持关闭**（§0；lite-model
 
 HTTP 服务（查询和写入的 HTTP 版）只在出现非 Python、又必须共享本缓存的接入方时再设计；现在没有。
 
-## 8. 评测（S2，lite-eval）
+## 8. 评测（lite-eval）
 
 按 lite-eval rule 9，target adapter 写在本仓库的 `eval/lite-eval/`。其它项目的模型评测运行时不传 policy
 （或 `refresh=True`），以免 trial 之间共享答案（§0）。
 
-- **replay**：一份真实查询日志按时间回放。指标是 L1 的命中率、L1+L2 的命中率、省下的 token。
-  先用它判断 L2 值不值得做。
-- **pairs**（S3 前）：数据集是 `(q1, q2, same_answer: bool)` 三元组，含难负例：增和删、数字不同、
-  否定、实体不同。
+- **pairs**（S3，L2 上线的前提）：回答"L2 安全不安全、阈值和 guard 怎么定"。数据集是
+  `(q1, q2, same_answer: bool)` 三元组，含难负例：增和删、数字不同、否定、实体不同。被评测的是
+  "embedder 余弦 ≥ 阈值且 guard 通过"这一判定本身，不调用 LLM。
+  - 数据来源（两份，分开评测，都要过 gate）：
+    1. **公开的人工标注集**：中文 LCQMC、PAWS-X（zh）。使用前核实各自的许可和能否在本地评测中使用，
+       结论和来源链接记进 `kb/eval-results.md`；许可不允许的不用。数据集文件不提交进仓库，按需下载到临时目录
+       （同 lite-mem 的 LongMemEval 做法）。
+    2. **按 lite-rag 语料生成的领域集**：对 lite-rag `eval/corpus*` 的文档，用 LLM 生成同义改写（正例）和
+       改数字、加否定、换实体的版本（难负例），再人工抽查至少 10%。lite-eval 会标 `synthetic_dataset`，
+       结果照实写"合成数据"。生成用本地模型（Ollama），不用订阅通道。
   - 指标：
     - `false_hit_rate` = 被判为命中的负例对数 / 负例对总数（主指标）；
     - `hit_rate` = 被判为命中的正例对数 / 正例对总数。
-  - 数据切分：阈值在 dev 集上扫描选定，gate 只在 held-out test 集上判定，两个集合不重叠。
-  - gate：test 集上负例至少 300 对，难负例占一半以上；`false_hit_rate ≤ 0.01`，且 95% Wilson 上界
-    `≤ 0.02`。上界和样本数都记进 `kb/eval-results.md`。
+  - 数据切分：阈值和 guard 规则只在 dev 集上定，gate 只在 held-out test 集上判定，两个集合不重叠。
+  - gate（每份 test 集各自判定）：负例至少 300 对，难负例占一半以上；`false_hit_rate ≤ 0.01`，且 95% Wilson
+    上界 `≤ 0.02`。上界、样本数、embedder 的 `model_id`、run id 都记进 `kb/eval-results.md`；过了 gate 的
+    阈值写进 `thresholds.json`（§5）。
+- **replay**（按需，有真实日志时）：一份真实查询日志按时间回放。指标是 L1 的命中率、L1+L2 的命中率、省下的
+  token。用来估算真实收益，不再是 L2 的前提（§0）。日志来自 lite-rag `ask()` 的可选提问日志（§9）。
 
 ## 9. 与其它项目的关系
 
 | 项目 | 接入方式 | 阶段 |
 | --- | --- | --- |
-| lite-rag | `ask()` 在生成时用 L1（answer role），`call_context(scope=…, cache=…)` 包住生成；L2 的 partition 由 lite-rag 根据检索到的 `doc_id@content_hash` 计算；以 `cache` extra 提供，默认关。前置条件：`build_model` 暴露 `LiteModel`（或一个注册 hook 的入口）；`Hit` 带上文档的 `content_hash`（`chunk_id` 在文档改动后不变，现在还没有）。截断已由 lite-model 报错，不再需要 `finish_reason`。S4 开始前，按 `ask()` 的实际流程写出 adapter 契约：scope 和 question 从哪来，partition 怎样由所有参与生成的文档算出 | S4 |
-| lite-eval | replay 和 pairs 两个评测 | S2、S3 |
+| lite-rag | 以 `cache` extra 提供（release wheel，默认关）。前置：`build_model` 暴露 `LiteModel`（或一个注册 hook 的入口）；`Completion` / `Answer` 带上 `cached`（现在 `Completion` 只有 text、model_id、usage，`llm.py:44-49`），否则 S2 的"回答标注缓存"无从做起。**S2，L1 两条路径**：① 建索引的 `contextual` / `graph` role，`call_context(scope="literag/<namespace>/<kb>", cache=Policy())` 包住每个 chunk 的调用（不传 `question`）；② `ask()` 的 `answer` role，scope 由 lite-rag 给出（默认 `literag/<namespace>/<kb>`，接入方可以再细到用户），传 `question`。`ask()` 加可选的提问日志（JSONL：时间、scope、question；S4 起加 partition），默认关，给以后的 replay 用。**S4，L2 只给 `ask()`**：`Policy(semantic=True)`，partition 是送进模型的检索结果按顺序的 `chunk_id@content_hash` 列表的 sha256（§0 方案 A，顺序不同也不命中）；前置：`Hit` 带上所属文档的 `content_hash`（`chunk_id` 在文档改动后不变，现在还没有）。截断已由 lite-model 报错，不再需要 `finish_reason`。每个阶段开始前，按 lite-rag 的实际流程写出 adapter 契约（scope、question、partition 从哪来） | S2、S4 |
+| lite-eval | pairs 评测（S3）；replay 评测（按需） | S3、按需 |
 | llm-steward | `kb.risk` / `kb.worthiness` 用 L1。steward 是 async 的：需要 lite-model 的 `AsyncHook`（lite-model §10，计划 0.3.0），同步 hook 里的 psycopg 查询会阻塞 event loop | 以后 |
 | lite-mem | extract / resolve 只用 L1，让重试不重复花钱；不用 L2；评测时不传 policy | 以后 |
 
@@ -239,13 +285,16 @@ src/lite_cache/
   types.py     Policy / RoleStats
   canonical.py 从 lite-eval vendor 过来
   keys.py      cache_key(call)
-  hook.py      CacheHook（lite-model Hook；S3 起 async 版本）
+  hook.py      CacheHook（lite-model Hook；async 版本等 lite-model 0.3.0，llm-steward 接入时）
+  semantic.py  S3：Embedder Protocol、分区内检索、guard
+  thresholds.json  S3：按 embedder 已校准的阈值（§5）
   config.py    Settings（LITECACHE_）
   db.py        PG 连接和 migrations
   store.py     Store Protocol 和 PgStore
   migrations/  NNNN_*.sql
   cli.py
 tests/unit/  tests/contract/
+eval/lite-eval/  pairs（S3）和 replay（按需）的 target 与 suite
 kb/          项目 KB（发现、评测数字、教训）
 ```
 
@@ -258,13 +307,18 @@ kb/          项目 KB（发现、评测数字、教训）
 | --- | --- | --- |
 | S0 | 骨架、CI（PG 服务）、migration 框架；依赖 lite-model（git tag 的 wheel） | ruff、mypy、pytest 全绿 |
 | S1 | L1：key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、PgStore、CLI | 用 lite-model 的 `FakeModel` 包在 `LiteModel` 外（或 `build` 加假 transport）：同一请求第二次不发请求，回复 `cached=True`、来源和 usage 是第一次的；scope、role、backend、model、messages、params（包括 tools、response_format、reasoning_effort）任何一项不同都不命中；没有 scope 或没有 policy 时不读不写；`structured()` 命中还原成同一个 schema 的值；`accept` 拒绝时不写入，记为 `skip:<reason>`；lite-model 抛 `Truncated` / `EmptyReply` 时不写、不计数；过期不命中；在默认 collation 不是 C 的库上，scope 前缀失效不会误删 `ab`，也不会漏删 `a/x.y`；每次调用只计一行，outcome 正确；并发 upsert 不丢计数；写失败或计数失败时仍返回回复，`store_errors` 加一，不抛错；读失败抛 `StoreError` 且不发请求；schema 为 `public` 或非法标识符时拒绝启动；canonical JSON 的 test vector 与 lite-eval 一致；`question` 不同不影响命中，传入的原文存进 `entries.question` |
-| S2 | lite-eval replay：日志格式、target、基线（无缓存 / L1） | `lite-eval run` 出基线，数字记入 `kb/eval-results.md` |
-| S3 | L2：最小 Embedder Protocol（`model_id`、`dim`、`embed_query`，形状同 lite-rag，由调用方注入；lite-rag 传入它的 `CachingEmbedder`）、分区 ANN、guard、pairs 评测 | pairs gate 通过（§8）；lookup 算出的向量直接用于写入，不再 embed 第二次 |
-| S4 | lite-rag `ask()` 接入（extra，默认关）；前置：lite-model 把 `Bounded` 的槽位移进执行器（计划 0.3.0），否则命中也要排队 | 关闭时行为与之前等价（equivalence 测试）；开启时第二次 ask 不调用 LLM，回答标注缓存 |
-| 按需 | HTTP 服务（§7）、SQLite / Redis 后端（§0）、single-flight、verifier（cross-encoder 或 `cache.verify` role）、llm-steward（要 `AsyncHook`）和 lite-mem 接入 | — |
+| S1.5 | 发布 lite-cache v0.1.0 release wheel（README、版本号、CI 产出 wheel） | 宿主能从 wheel 安装；lite-rag 的 `cache` extra 能解析它 |
+| S2 | lite-rag 接 L1（在 lite-rag 仓库里做，按它的 stage 流程）：建索引的 `contextual` / `graph` role 与 `ask()`；`ask()` 的可选提问日志（§9） | 关闭时行为与之前等价（equivalence 测试，index 身份不变）；开启时：同一份文档第二次入库，`contextual` / `graph` 不发请求，产出的 chunk 上下文和图与第一次逐字相同；同一问题第二次 ask 不调用 LLM，回答标注缓存；两个 kb 的 scope 不同，互不命中；按 kb 前缀 invalidate 只清掉那个 kb；提问日志关闭时不写文件 |
+| S3 | L2：Embedder Protocol、`Policy.semantic`、分区内余弦检索、guard、`hit_semantic` 计数、按 embedder 的阈值配置；pairs 评测（公开集 + 领域合成集，§8） | 两份 test 集各自过 gate（§8），数字记入 `kb/eval-results.md`；lookup 算出的向量直接用于写入，不再 embed 第二次；`semantic=False` 或缺 question / partition 时与 S1 行为相同；没有该 embedder 的阈值时 `ConfigError`；不同 partition、不同 scope、不同 embedder 的条目互不命中；guard 拦下数字不同 / 否定 / 实体不同的近似问题（每条规则各有触发和不触发的测试） |
+| S4 | lite-rag `ask()` 接 L2（在 lite-rag 仓库里做）：`Hit` 带 `content_hash`，partition 计算，`Policy(semantic=True)` 的配置开关（默认关）；提问日志加 partition | 文档内容改了，partition 跟着变，旧答案不再被 L2 命中；同样的 chunk 换了顺序不命中；L2 命中的回答里每个 `[n]` 指向的 chunk 与当初生成时相同（引用测试）；同义问题第二次 ask 不调用 LLM，统计记为 `hit_semantic`；关闭时与 S2 行为相同 |
+| 按需 | replay 评测（有真实日志时，§8）；HTTP 服务（§7）、SQLite / Redis 后端（§0）、single-flight、verifier（cross-encoder 或 `cache.verify` role）、llm-steward（要 lite-model 0.3.0 的 `AsyncHook`）、lite-mem、Banyan（先迁到 lite-model）接入 | — |
 
 ## 12. 待确认
 
 - ~~**L1 是否作为 llm-gateway 的中间件**~~：2026-11-19 结案，不做。lite 模块的调用都经过 lite-model，hook 就是
   必经点；gateway 只承载订阅通道的一部分流量。
-- **L2 的 guard 规则集**：数字、否定词、实体等规则，S3 用 pairs 里的难负例实测后再定。
+- **L2 的 guard 规则集**：数字、否定词、实体等规则，S3 用 pairs 里的难负例在 dev 集上实测后再定。
+- **公开问题对数据集的许可**：LCQMC、PAWS-X 能否用于本地评测，S3 开始时核实（§8）；不能用就换别的人工标注集，
+  并在这里记下。
+- **lite-rag 默认的 embedder 维度和模型**：S3 校准的第一个 embedder 就是 lite-rag 的默认 embedder，开始前从
+  lite-rag 配置里确认。
