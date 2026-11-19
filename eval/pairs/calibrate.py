@@ -27,7 +27,7 @@ from lite_eval.datasets.local import read_cases
 from lite_eval.store import load_run
 
 from lite_cache.pairs import Scored, gate, select_threshold, stored_threshold
-from lite_cache.semantic import guard
+from lite_cache.semantic import guard, key_of
 
 REPO = Path(__file__).parents[2]
 DATASETS = [REPO / "eval/pairs/data/public", REPO / "eval/pairs/generated"]
@@ -63,32 +63,40 @@ def _pairs() -> dict[str, Pair]:
 
 
 def _scored(run_dirs: list[Path]) -> tuple[Scores, str]:
-    """(set, split) -> scored pairs, and the one embedder `model_id` the runs measured."""
+    """(set, split) -> scored pairs, and the thresholds-table key of what the runs measured: the
+    embedder's `model_id`, or `"<embedder>+<verifier>"` for verified runs (design §13)."""
     pairs = _pairs()
     by_set: Scores = defaultdict(list)
     embedders: set[str] = set()
     for directory in run_dirs:
         run = load_run(directory)
-        embedders.add(str(run.record.target.config["embedder"]))
+        config = run.record.target.config
+        verifier = config.get("verifier")
+        embedder = str(config["embedder"])
+        embedders.add(key_of(embedder, None if verifier is None else str(verifier)))
         for out in run.outputs:
             if out.error is not None or not isinstance(out.value, dict):
                 raise SystemExit(f"{out.case_id}: no output ({out.error}); re-run the suite")
             p, cosine = pairs[out.case_id], out.value["cosine"]
-            assert isinstance(cosine, float)
+            verified = out.value.get("same_answer")
+            assert isinstance(cosine, float) and (verified is None or isinstance(verified, bool))
             by_set[(p.set, p.split)].append(
                 Scored(
                     same=p.same,
                     cosine=cosine,
                     guard=guard(p.q1, p.q2),
                     hard=not p.same,  # PAWS: word-swap adversaries; generated: one change each
+                    verified=verified,
                 )
             )
     if len(embedders) != 1:
-        raise SystemExit(f"the runs must measure one embedder, not {sorted(embedders)}")
+        raise SystemExit(
+            f"the runs must measure one embedder (+ verifier), not {sorted(embedders)}"
+        )
     return by_set, embedders.pop()
 
 
-def report(run_dirs: list[Path]) -> tuple[str, str, float | None, bool]:
+def report(run_dirs: list[Path], stage: str = "") -> tuple[str, str, float | None, bool]:
     """(Markdown, embedder, threshold, every test set passed)."""
     by_set, embedder = _scored(run_dirs)
     sets = sorted({s for s, _ in by_set})
@@ -96,7 +104,7 @@ def report(run_dirs: list[Path]) -> tuple[str, str, float | None, bool]:
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     lines = [
-        f"## {date.today()} — L2 calibration, {embedder} (S3b)",
+        f"## {date.today()} — L2 calibration, {embedder}" + (f" ({stage})" if stage else ""),
         "",
         f"Runs: {', '.join(str(r.relative_to(REPO)) for r in run_dirs)}  ",
         f"Commit: {commit} (guard applied at calibration)",
@@ -128,14 +136,16 @@ def report(run_dirs: list[Path]) -> tuple[str, str, float | None, bool]:
             f"| {s} | {r.negatives} | {r.hard} | {r.false_hits} | {r.rate:.4f} | {r.upper:.4f}"
             f" | {r.positives} | {r.hit_rate:.3f} | {verdict} |"
         )
-    refused = sum(
-        1
-        for (_, split), rows in by_set.items()
-        if split == "test"
-        for x in rows
-        if not x.same and x.cosine >= threshold and x.guard is not None
-    )
-    lines += ["", f"Test negatives at or above the threshold that the guard refused: {refused}."]
+    test = [x for (_, split), rows in by_set.items() if split == "test" for x in rows]
+    above = [x for x in test if x.cosine >= threshold]
+    refused = sum(not x.same and x.guard is not None for x in above)
+    judged_out = [x for x in above if x.guard is None and not x.admitted]
+    lines += [
+        "",
+        f"Test pairs at or above the threshold: the guard refused {refused} negatives; the verifier"
+        f" refused {sum(not x.same for x in judged_out)} negatives and"
+        f" {sum(x.same for x in judged_out)} positives.",
+    ]
     return "\n".join(lines) + "\n", embedder, threshold, passed
 
 
@@ -143,13 +153,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("runs", nargs="+", type=Path)
     parser.add_argument("--write", action="store_true", help="append to kb/eval-results.md")
+    parser.add_argument("--stage", default="", help="label for the report heading, e.g. S3c")
     parser.add_argument(
         "--write-threshold",
         action="store_true",
         help="with --write, also write the threshold into thresholds.json on a PASS",
     )
     args = parser.parse_args()
-    text, embedder, threshold, passed = report([r.resolve() for r in args.runs])
+    text, embedder, threshold, passed = report([r.resolve() for r in args.runs], args.stage)
     print(text)
     written = False
     if args.write:

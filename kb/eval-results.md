@@ -52,3 +52,42 @@ separates them; the guard only catches numbers and negation words.
 Data: PAWS / PAWS-X from Hugging Face google-research-datasets (sha256 in
 `eval/pairs/data/public/sources.json`, not committed); generated set `eval/pairs/generated/`
 (committed). Ollama bge-m3:567m, local, free.
+
+## 2026-11-20 — L2 calibration, ollama/bge-m3:567m+ollama:qwen3:8b#0310ecea (S3c)
+
+Runs: eval/lite-eval/runs/pairs-verified-public/20261119T194605435631Z-qwen3-8b-92b533, eval/lite-eval/runs/pairs-verified-generated/20261119T193920454482Z-qwen3-8b-dcc6c4  
+Commit: 7e463c5 + the S3c working tree (committed afterwards on feat/s3c-verifier) (guard applied at calibration)
+
+| set | dev threshold (FHR ≤ 0.005, in [0.80, 0.99]) |
+| --- | --- |
+| generated | 0.975 |
+| paws-en | none |
+| pawsx-zh | none |
+
+**No threshold**: none holds the dev margin for paws-en, pawsx-zh.
+
+### Reading (S3c, qwen3:8b verifier; owner rule 2026-11-20: FAIL → code merges, L2 stays off)
+
+The verifier helps on our own question pairs but cannot carry PAWS. Generated set at its dev floor
+0.975 on test: 2/334 false hits (Wilson upper 0.0216, FAIL by a hair), hit rate 22 % (S3b without a
+verifier: 5/334, 9 %). On dev it said "same" for 132 of 133 paraphrases; most negatives it let
+through are label noise of the generated set — a "scope" that does not change the answer ("in the
+solar system", "垃圾分类中"), near-synonym "entities" (system clock / device's clock, 餐巾纸 / 纸巾),
+one broken row — and a few real misses (login / payment page). PAWS / PAWS-X (sampled, seed
+20261120) on dev:
+
+| set | floor | false hits (negatives) | hits (positives) |
+| --- | --- | --- | --- |
+| paws-en | 0.80 | 245/559 (0.44) | 404/441 (0.92) |
+| paws-en | 0.99 | 43/559 (0.077) | 176/441 (0.40) |
+| pawsx-zh | 0.80 | 229/566 (0.40) | 337/434 (0.78) |
+| pawsx-zh | 0.99 | 24/566 (0.042) | 75/434 (0.17) |
+
+PAWS pairs are long declarative sentences with swapped words (Paramaribo / Suriname, Jesus /
+Jonah), not questions; qwen3:8b reads them as rewordings. Some PAWS negatives differ only in
+punctuation. qwen3:1.7b was not run (the plan: only if 8b passes).
+
+- Guard gap seen on dev: 分别 contains 别, so "分别是哪些" / "分别不是哪些" both "have" a negation and
+  pass the guard; a count of negations (1 vs 2) would refuse it. Not adopted in S3c (it would not
+  change the outcome); an open guard item (design §12).
+- Runs: verified-generated 897 pairs 404 s; verified-public 4000 pairs 2859 s (local, free).

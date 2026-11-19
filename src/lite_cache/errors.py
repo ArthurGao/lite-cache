@@ -21,3 +21,8 @@ class ConfigError(LiteCacheError):
 class EmbedderError(StoreError):
     """The injected embedder failed or returned a vector of the wrong size: a read failure, so
     the call fails before anything is sent (design §3.5), told apart from a database error."""
+
+
+class VerifierError(StoreError):
+    """The injected L2 verifier failed (raised, timed out, answered off-schema): a read failure,
+    so the call fails before anything is sent (design §13, §3.5)."""

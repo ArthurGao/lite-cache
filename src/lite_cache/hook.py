@@ -13,14 +13,14 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 
-from lite_model import Provenance, Reply, StructuredReply, TextReply, Usage
+from lite_model import Provenance, Reply, StructuredReply, TextReply, Usage, call_context
 from lite_model.hooks import Call
 from pydantic import ValidationError
 
 from lite_cache import semantic
-from lite_cache.errors import ConfigError, EmbedderError
+from lite_cache.errors import ConfigError, EmbedderError, VerifierError
 from lite_cache.keys import cache_key, check_scope, policy_from
-from lite_cache.semantic import Embedder, guard
+from lite_cache.semantic import Embedder, Verifier, guard
 from lite_cache.store import Store
 from lite_cache.types import Entry, Policy, RoleStats
 
@@ -44,26 +44,31 @@ class CacheHook:
         clock: Callable[[], datetime] = _utcnow,
         *,
         embedder: Embedder | None = None,
+        verifier: Verifier | None = None,
         thresholds: Mapping[str, float] | None = None,
     ) -> None:
-        """`embedder` (L2 only) is the caller's; its threshold must exist in `thresholds`
-        (default: the calibrated table), or construction fails (design §0)."""
+        """`embedder` (L2 only) and `verifier` (optional, design §13) are the caller's; the
+        threshold of that pair (`semantic.threshold_key`) must exist in `thresholds` (default: the
+        calibrated table), or construction fails (design §0)."""
         self._store = store
         self._clock = clock
         self._embedder = embedder
+        self._verifier = verifier
         self._threshold: float | None = None
         if embedder is not None:
             table = dict(thresholds) if thresholds is not None else semantic.thresholds()
-            self._threshold = table.get(embedder.model_id)
+            key = semantic.threshold_key(embedder, verifier)
+            self._threshold = table.get(key)
             if self._threshold is None:
                 raise ConfigError(
-                    f"no calibrated L2 threshold for embedder {embedder.model_id!r} "
-                    "(design §8; LITECACHE_SEMANTIC_THRESHOLDS)"
+                    f"no calibrated L2 threshold for {key!r} "
+                    "(design §8, §13; LITECACHE_SEMANTIC_THRESHOLDS)"
                 )
         # The vector a lookup made, kept for the write of the same call (no second embedding).
         # Weak references: a call that fails never reaches `after`, and must not be kept alive.
         self._vectors: OrderedDict[int, tuple[weakref.ref[Call], list[float]]] = OrderedDict()
         self.store_errors = 0
+        self.verifier_rejects = 0  # L2 candidates the verifier judged different (design §13)
 
     def before(self, call: Call) -> Reply | None:
         cached = _cached(call)
@@ -107,13 +112,41 @@ class CacheHook:
             return None
         entry, similarity = found
         # `not >=`: a NaN similarity is a miss, never a hit
-        if not similarity >= self._threshold or guard(question, entry.question or "") is not None:
+        if not similarity >= self._threshold or entry.question is None:
+            return None
+        if guard(question, entry.question) is not None:
+            return None
+        if not self._verified(question, entry.question, entry.key):
             return None
         reply = _restore(call, entry)
         if reply is not None:
             self._vectors.pop(id(call), None)  # a hit: after() will not run for this call
             self._count_hit(call, scope, "hit_semantic", entry, now)
         return reply
+
+    def _verified(self, question: str, candidate: str, key: str) -> bool:
+        """True without a verifier; otherwise its verdict. A failure is a read failure. Any model
+        call the verifier makes runs without this call's policy and question: it is not cached
+        and cannot recurse into L2 (design §13), whatever the verifier."""
+        if self._verifier is None:
+            return True
+        try:
+            with call_context(cache=None, question=None, partition=None):
+                same = self._verifier.same_answer(question, candidate)
+        except VerifierError:
+            raise
+        except Exception as exc:
+            raise VerifierError(
+                f"verifier {self._verifier.model_id}: {type(exc).__name__}"
+            ) from exc
+        if type(same) is not bool:  # a truthy "no" must not become a hit
+            raise VerifierError(
+                f"verifier {self._verifier.model_id} returned {type(same).__name__}, not bool"
+            )
+        if not same:
+            self.verifier_rejects += 1
+            log.debug("lite-cache: the verifier refused L2 candidate %s", key[:12])
+        return same
 
     def _remember(self, call: Call, vector: list[float]) -> None:
         key = id(call)

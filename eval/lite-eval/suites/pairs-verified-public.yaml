@@ -1,0 +1,12 @@
+# S3c L2 verifier calibration (lite-cache design §13.3): PAWS (en) + PAWS-X (zh), sampled (eval/pairs/sample.py).
+#   uv run lite-eval run eval/lite-eval/suites/pairs-verified-public.yaml   # Ollama: bge-m3 + the judge
+# The target outputs the cosine and, from 0.80 up, the verifier's verdict; eval/pairs/calibrate.py
+# applies the guard, chooses the floor on dev and gates it on test. Scorer: a shape check.
+name: pairs-verified-public
+dataset: ../../pairs/data/public-sample
+targets:
+  - python: lite_cache.eval_target:verified_pairs
+    configs:
+      - {name: qwen3-8b, model: "bge-m3:567m", dim: 1024, judge: "qwen3:8b"}
+scorers:
+  - regex: {pattern: '"cosine":-?[0-9]'}

@@ -9,11 +9,13 @@ from lite_cache.errors import (
     InvalidScope,
     LiteCacheError,
     StoreError,
+    VerifierError,
 )
 from lite_cache.hook import CacheHook
-from lite_cache.semantic import Embedder
+from lite_cache.semantic import Embedder, Verifier
 from lite_cache.store import PgStore, Store, open_store
 from lite_cache.types import Policy, RoleStats
+from lite_cache.verifier import ModelVerifier
 
 __all__ = [
     "CacheHook",
@@ -22,11 +24,14 @@ __all__ = [
     "EmbedderError",
     "InvalidScope",
     "LiteCacheError",
+    "ModelVerifier",
     "PgStore",
     "Policy",
     "RoleStats",
     "Settings",
     "Store",
     "StoreError",
+    "Verifier",
+    "VerifierError",
     "open_store",
 ]

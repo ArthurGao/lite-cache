@@ -1,6 +1,7 @@
 """The pairs evaluation's pure parts (design §8, S3b): dataset conversion, the Wilson bound,
 threshold selection on dev and the gate on test."""
 
+from collections import Counter
 from typing import Any
 
 import pytest
@@ -188,3 +189,46 @@ def test_a_stored_threshold_never_lies_below_the_chosen_one(chosen: float) -> No
     stored = stored_threshold(chosen)
     assert chosen <= stored <= chosen + 1e-4
     assert stored == round(stored, 4)
+
+
+def test_a_verified_hit_needs_all_three() -> None:
+    def neg(verified: bool | None) -> Scored:
+        return Scored(same=False, cosine=0.99, guard=None, hard=True, verified=verified)
+
+    assert neg(False).hit(0.9) is False
+    assert neg(True).hit(0.9) is True
+    assert neg(None).hit(0.9) is True  # no verdict (an S3b run): cosine and guard decide
+
+
+def test_verdicts_let_a_lower_floor_through() -> None:
+    # 10 negatives at 0.95 that the verifier refuses: without verdicts they force the floor above
+    # them; with verdicts they do not count.
+    def neg(cos: float, verified: bool | None) -> Scored:
+        return Scored(same=False, cosine=cos, guard=None, hard=True, verified=verified)
+
+    unverified = [neg(0.95, None)] * 10 + [neg(0.5, None)] * 190
+    verified = [neg(0.95, False)] * 10 + [neg(0.5, None)] * 190
+    floor = select_threshold(unverified)
+    assert floor is not None and floor > 0.95
+    assert select_threshold(verified) == 0.8
+
+
+def test_sampling_keeps_splits_and_is_deterministic() -> None:
+    from lite_cache.pairs import sample_by_split
+
+    cases = [
+        {"id": f"{s}:{p}:{i}", "tags": {"set": s, "split": p}}
+        for s in ("paws-en", "pawsx-zh")
+        for p in ("dev", "test")
+        for i in range(1500)
+    ]
+    picked = sample_by_split(cases, per_split=1000, seed=20261120)
+    assert len(picked) == 4000
+    groups = Counter((c["tags"]["set"], c["tags"]["split"]) for c in picked)
+    assert set(groups.values()) == {1000}
+    assert all(c["id"].startswith(f"{c['tags']['set']}:{c['tags']['split']}:") for c in picked)
+    assert [c["id"] for c in sample_by_split(cases, per_split=1000, seed=20261120)] == [
+        c["id"] for c in picked
+    ]
+    small = sample_by_split(cases[:10], per_split=1000, seed=1)  # fewer than asked: all of them
+    assert len(small) == 10

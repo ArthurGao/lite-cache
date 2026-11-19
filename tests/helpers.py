@@ -10,7 +10,7 @@ from lite_model.hooks import Call
 
 from tests.upstream import Upstream
 
-ROLES = RoleSpec({"answer": RolePolicy(), "graph": RolePolicy()})
+ROLES = RoleSpec({"answer": RolePolicy(), "graph": RolePolicy(), "cache_verifier": RolePolicy()})
 LOCAL: dict[str, Any] = {"backend": "ollama", "model": "qwen3:8b"}
 ASK = (Message("user", "Hi?"),)
 
@@ -45,3 +45,20 @@ def a_call(
         request=MappingProxyType(request),
         context=MappingProxyType(dict(context or {})),
     )
+
+
+class FakeVerifier:
+    """An L2 `Verifier` with a fixed verdict that records what it was asked."""
+
+    model_id = "fake-judge"
+
+    def __init__(self, same: bool = True, *, fail: bool = False) -> None:
+        self.same = same
+        self.fail = fail
+        self.calls: list[tuple[str, str]] = []
+
+    def same_answer(self, question: str, candidate: str) -> bool:
+        self.calls.append((question, candidate))
+        if self.fail:
+            raise RuntimeError("judge down")
+        return self.same
