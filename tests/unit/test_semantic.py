@@ -43,6 +43,12 @@ def test_bad_thresholds_are_refused(monkeypatch: pytest.MonkeyPatch, raw: str) -
         ("Can I keep it?", "Can I not keep it?", "negation"),
         ("What does E4012 mean?", "What does E4013 mean?", "numbers"),
         ("same question", "same question", None),
+        # S3c dev: 分别 contains 别; counting negations (1 vs 2) refuses the real difference
+        ("中国茶的六大类分别是哪些", "中国茶的六大类分别不是哪些", "negation"),
+        # words with a negation character that negate nothing are not counted
+        ("这些物种属于不同的生态种群", "这些物种属于各种生态种群", None),
+        ("她拥有非常巨大的潜力", "她拥有巨大的潜力", None),
+        ("能退货吗", "不能不退货吗", "negation"),
     ],
 )
 def test_the_guard(q1: str, q2: str, reason: str | None) -> None:
