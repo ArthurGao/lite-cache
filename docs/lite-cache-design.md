@@ -333,6 +333,10 @@ kb/          项目 KB（发现、评测数字、教训）
 - ~~**L1 是否作为 llm-gateway 的中间件**~~：2026-11-19 结案，不做。lite 模块的调用都经过 lite-model，hook 就是
   必经点；gateway 只承载订阅通道的一部分流量。
 - **L2 的 guard 规则集**：2026-11-20 实测：数字和否定词（含连写的 "cannot"）保留；dev 上试过的"纯增量"规则（一句的词全在另一句里且多出 ≥2 个）能挡掉大部分加条件的负例，但生成集 test 仍 5/334，没采用。剩下的是单词替换（反义词、实体），guard 规则挡不住；若做 L2，下一步是 verifier（§0 2026-11-20）。
+- **pgvector 装在 `public`**（2026-11-20，跨仓库体检后修）：`migrate` 改成 `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`，
+  和 lite-rag、lite-mem、llm-steward 一致；role 和 schema 同名时，`"$user"` 排在 search_path 最前，不带 `SCHEMA` 的安装会落进那个 schema。
+  Codex 提出"已经装在别的 schema 的扩展不会被挪走"，不改：这不是这次改动引入的，向量操作会直接报错而不是悄悄出错，本机三个库的扩展
+  都在 `public`。
 - **guard 的已知局限**（2026-11-20 记下，不改）：数字只认阿拉伯数字串，按排序后的集合比较。
   - "3" 对 "三"：一边有数字一边没有，guard 拦下，方向安全（少一次命中）。
   - "three" 对 "four"、"三" 对 "四"：两边都没有数字串，guard 不管，全靠阈值。

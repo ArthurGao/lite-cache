@@ -1,5 +1,7 @@
 """Migrations (design §4): the runner vendored from lite-rag, and `open_store` migrating on open."""
 
+from unittest.mock import MagicMock
+
 import psycopg
 
 from lite_cache.config import Settings
@@ -40,3 +42,12 @@ def test_open_store_migrates_a_fresh_schema(pg: psycopg.Connection, pg_url: str)
         assert pending(pg, TEST_SCHEMA) == []
     finally:
         store.close()
+
+
+def test_the_vector_extension_is_created_in_public(pg: psycopg.Connection) -> None:
+    # pgvector already exists here, so check the statement sent, not where a fresh install lands.
+    spy = MagicMock(wraps=pg)
+    migrate(spy, TEST_SCHEMA)
+    sent = [str(c.args[0]) for c in spy.execute.call_args_list]
+    created = [q for q in sent if "CREATE EXTENSION" in q]
+    assert created == ["CREATE EXTENSION IF NOT EXISTS vector SCHEMA public"]

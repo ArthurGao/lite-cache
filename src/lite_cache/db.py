@@ -1,9 +1,10 @@
 """PostgreSQL access and migrations (lite-cache design §4).
 
-Vendored from lite-rag `src/lite_rag/db.py` @ e42fc93 (blob a9ec093, unchanged at lite-rag HEAD)
+Vendored from lite-rag `src/lite_rag/db.py` @ e42fc93 (blob a9ec093; later edits noted below)
 (AGENTS.md rule 5). Edits: this docstring; the migrations package (`lite_cache.migrations`); the
 error class (`lite_cache.errors.StoreError`); the variable named in `require_url`; the advisory
-lock prefix (`lite_cache:`); and `pending()` at the end, which is lite-cache's own.
+lock prefix (`lite_cache:`). `pending()` at the end began here and is now in lite-rag too;
+both copies install pgvector with `SCHEMA public`.
 
 Migrations are the `NNNN_*.sql` files in `migrations/`, applied in order, each in its own
 transaction, recorded in `<schema>.schema_migrations`. They run with
@@ -66,7 +67,8 @@ def migrate(conn: psycopg.Connection, schema: str, until: str | None = None) -> 
     """Apply pending migrations to `schema` — up to and including `until` when given; returns
     the versions applied (empty: up to date)."""
     with conn.transaction():
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # In public: with a role named like the schema, "$user" would capture a bare install.
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector SCHEMA public")
         conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
         conn.execute(
             sql.SQL(
