@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），S1.5（发布 v0.1.0 wheel：README、CI 的 package / release 任务）进行中。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
+**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），S1.5 完成：v0.1.0 已发布（https://github.com/ArthurGao/lite-cache/releases/tag/v0.1.0；新项目按 URL 装 wheel，lite-model 0.2.1 随元数据解析，冒烟命中）。下一步 S2：lite-rag 接 L1。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
