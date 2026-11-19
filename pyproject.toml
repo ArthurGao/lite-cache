@@ -7,9 +7,11 @@ requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 # Pinned exactly, the same versions as lite-model and lite-rag (AGENTS.md rule 8). lite-model is the
-# only sibling imported at run time (AGENTS.md rule 5): its hook protocol and reply types.
+# only sibling imported at run time (AGENTS.md rule 5): its hook protocol and reply types. It is a
+# direct URL in the metadata, not a [tool.uv.sources] entry: lite-model is not on PyPI, and the
+# wheel must install on its own (a sources entry does not reach the wheel's metadata; S1.5).
 dependencies = [
-    "lite-model",
+    "lite-model @ https://github.com/ArthurGao/lite-model/releases/download/v0.2.1/lite_model-0.2.1-py3-none-any.whl",
     "psycopg[binary,pool]==3.3.8",
     "pydantic==2.14.3",
     "pydantic-settings==2.16.2",
@@ -30,9 +32,6 @@ dev = [
 requires = ["uv_build>=0.10,<0.11"]
 build-backend = "uv_build"
 
-[tool.uv.sources]
-lite-model = { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.2.1/lite_model-0.2.1-py3-none-any.whl" }
-
 [tool.ruff]
 line-length = 100
 
@@ -46,7 +45,7 @@ exclude = ["*.md"]
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 mypy_path = "src"
 
 [tool.pytest.ini_options]

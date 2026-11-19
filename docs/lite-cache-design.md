@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），下一步 S1.5（发布 wheel）。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
+**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），S1.5（发布 v0.1.0 wheel：README、CI 的 package / release 任务）进行中。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -36,6 +36,7 @@
 | 2026-11-19 | `ask()` 的 L2 partition 是"送进模型的上下文完全相同"：检索结果**按顺序**的 `chunk_id@content_hash` 列表的 sha256；同样的 chunk 换了顺序也不命中（方案 A）。问题日志和 `stats` 显示"同样的 chunk、不同顺序"多时，再改为方案 B（同一组 chunk、命中时按当前顺序重排引用编号） | `ask()` 的回答带 `[n]` 引用，编号指向本次检索的 chunk 列表（`answer.py` `check_citations`）；L2 命中返回的是另一个问题的答案，只有上下文完全相同，引用和依据才都对。按 kb 版本分区（方案 C）会让答案引用这次没检索到的 chunk，否决。代价是命中少，所以 L1、L2 命中率分开统计，日志记下 partition，真实使用中看得到 L2 有没有用（用户 2026-11-19 选 A） |
 | 2026-11-19 | lite-rag 以 release wheel 依赖 lite-cache（`cache` extra） | 与 lite-model、lite-eval 的依赖方式一致（workspace `AGENTS.md` "How pins work"） |
 | 2026-11-19 | 接入 lite-rag 不等 lite-model 0.3.0 | 建索引经过 `Bounded`：命中也占一个槽位，但立刻返回，吞吐几乎不变；`ask()` 不经过 `Bounded`。0.3.0 只是 llm-steward（async）接入的前置 |
+| 2026-11-19 | wheel 的元数据里 lite-model 写成直接 URL（`lite-model @ https://…/v0.2.1/…whl`），不用 `[tool.uv.sources]` | S1.5 的冒烟测试发现：sources 不进 wheel 的元数据，宿主单独装 lite-cache 的 wheel 时解析不到 lite-model（它不在 PyPI）。直接 URL 让 wheel 自己能装；升级 lite-model 要发新版 lite-cache，与 workspace 里"同一个 lite-model 版本"的规则一致 |
 
 ## 1. 概述
 
