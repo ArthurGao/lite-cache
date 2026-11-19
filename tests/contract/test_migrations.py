@@ -9,8 +9,9 @@ from tests.conftest import TEST_SCHEMA
 
 
 def test_migrate_applies_once(pg: psycopg.Connection) -> None:
-    assert pending(pg, TEST_SCHEMA) == ["0001_initial"]
-    assert migrate(pg, TEST_SCHEMA) == ["0001_initial"]
+    every = ["0001_initial", "0002_semantic"]  # S3 added the second
+    assert pending(pg, TEST_SCHEMA) == every
+    assert migrate(pg, TEST_SCHEMA) == every
     assert migrate(pg, TEST_SCHEMA) == []
     assert pending(pg, TEST_SCHEMA) == []
 

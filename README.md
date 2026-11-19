@@ -4,7 +4,9 @@ An LLM response cache for the lite modules. It plugs into
 [lite-model](https://github.com/ArthurGao/lite-model) as a hook: when the same request comes again
 (**L1**, exact: same scope, role, model, messages and parameters), the answer comes from PostgreSQL
 instead of another model call, and the tokens it saved are counted. Semantic matching (**L2**) is
-planned (design §11 S3–S4).
+built but off: its calibration (2026-11-20, bge-m3) found no threshold that is both safe and useful,
+so no embedder has a threshold and `CacheHook(embedder=…)` raises `ConfigError` (design §0, §8;
+numbers in `kb/eval-results.md`).
 
 Design and decisions: [`docs/lite-cache-design.md`](docs/lite-cache-design.md). License: Apache-2.0.
 
@@ -96,6 +98,7 @@ litecache config                          # the settings, with the password reda
 | --- | --- | --- |
 | `LITECACHE_DATABASE_URL` | — | PostgreSQL URL (required) |
 | `LITECACHE_SCHEMA` | `lite_cache` | lite-cache's own schema; not `public`, `information_schema` or `pg_*` |
+| `LITECACHE_SEMANTIC_THRESHOLDS` | — | L2 (off, see above): `{"<embedder model_id>": <threshold>}` on top of the calibrated table shipped in the package; values only from a calibration run |
 | `LITECACHE_TEST_DATABASE_URL` | — | tests only; they use the schema `lite_cache_test` |
 
 ## Development

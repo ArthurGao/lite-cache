@@ -24,6 +24,10 @@ OwnSchema = Annotated[
 ]
 
 
+# An L2 threshold: a cosine similarity in (0, 1], only ever from a calibration run (design §8).
+Threshold = Annotated[float, Field(gt=0, le=1)]
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="LITECACHE_", env_file=".env", extra="ignore", populate_by_name=True
@@ -33,3 +37,5 @@ class Settings(BaseSettings):
     # Read only from LITECACHE_SCHEMA: a plain alias would make pydantic-settings read an
     # unprefixed SCHEMA variable instead (design §5).
     schema_name: OwnSchema = Field("lite_cache", validation_alias="LITECACHE_SCHEMA")
+    # L2 thresholds per embedder model_id (JSON), on top of the packaged calibrated table (§5).
+    semantic_thresholds: dict[str, Threshold] = Field(default_factory=dict)

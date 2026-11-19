@@ -11,3 +11,13 @@ class StoreError(LiteCacheError):
 
 class InvalidScope(LiteCacheError, ValueError):
     """A scope that is not one or more `/`-separated `[A-Za-z0-9_.-]+` segments (design §3.1)."""
+
+
+class ConfigError(LiteCacheError):
+    """The cache cannot serve what a call asks for: L2 without an embedder or without a
+    threshold calibrated for that embedder (design §0), or a malformed setting."""
+
+
+class EmbedderError(StoreError):
+    """The injected embedder failed or returned a vector of the wrong size: a read failure, so
+    the call fails before anything is sent (design §3.5), told apart from a database error."""
