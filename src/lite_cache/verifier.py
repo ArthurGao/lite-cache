@@ -2,6 +2,7 @@
 declares a non-routable role (e.g. `cache_verifier`: qwen3:8b, `reasoning_effort: none`,
 temperature 0); the verdict is a structured reply held to `SameAnswer`."""
 
+import json
 from importlib.resources import files
 
 from lite_model import Message, Model
@@ -30,7 +31,7 @@ class ModelVerifier:
         role: str,
         *,
         target: Target | None = None,
-        prompt_version: str = "v1",
+        prompt_version: str = "v2",
     ) -> None:
         self._model = model
         self._role = role
@@ -50,7 +51,9 @@ class ModelVerifier:
     def same_answer(self, question: str, candidate: str) -> bool:
         messages = [
             Message("system", self._prompt),
-            Message("user", f"A: {question}\nB: {candidate}"),
+            # One JSON value per question: a stored question is untrusted text, and quotes,
+            # newlines or a fake "B:" line inside it cannot change the message's structure.
+            Message("user", json.dumps({"A": question, "B": candidate}, ensure_ascii=False)),
         ]
         try:  # CacheHook runs this without the outer call's policy (no caching, no L2)
             reply = self._model.structured(self._role, messages, SameAnswer)
