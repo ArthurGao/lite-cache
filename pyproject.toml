@@ -1,0 +1,53 @@
+[project]
+name = "lite-cache"
+version = "0.1.0"
+description = "An LLM response cache for the lite modules: a lite-model hook over PostgreSQL"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# Pinned exactly, the same versions as lite-model and lite-rag (AGENTS.md rule 8). lite-model is the
+# only sibling imported at run time (AGENTS.md rule 5): its hook protocol and reply types.
+dependencies = [
+    "lite-model",
+    "psycopg[binary,pool]==3.3.8",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.2",
+    "typer==0.27.3",
+]
+
+[project.scripts]
+litecache = "lite_cache.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["uv_build>=0.10,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+lite-model = { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.2.1/lite_model-0.2.1-py3-none-any.whl" }
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "RUF"]
+
+[tool.ruff.format]
+# Code blocks in docs are hand-aligned illustrations, not code.
+exclude = ["*.md"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

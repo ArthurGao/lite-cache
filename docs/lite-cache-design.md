@@ -220,7 +220,7 @@ SQLite 后端以后按需再加，复用同一套 contract 测试。
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `LITECACHE_DATABASE_URL` | — | 必填 |
-| `LITECACHE_SCHEMA` | `lite_cache` | 两条校验都要有：标识符正则 `^[a-z_][a-z0-9_]{0,62}$`；不能是 `public`、`information_schema` 或 `pg_*`。后一条照搬 lite-mem `own_schema`，前一条在 lite-mem 里是另一个 pydantic 约束，也一起照搬。字段名写成 `schema_name`，alias 为 `schema`（同 lite-rag），以免遮蔽 pydantic 的同名属性 |
+| `LITECACHE_SCHEMA` | `lite_cache` | 两条校验都要有：标识符正则 `^[a-z_][a-z0-9_]{0,62}$`；不能是 `public`、`information_schema` 或 `pg_*`。后一条照搬 lite-mem `own_schema`，前一条在 lite-mem 里是另一个 pydantic 约束，也一起照搬。字段名写成 `schema_name`（以免遮蔽 pydantic 的同名属性），只从 `LITECACHE_SCHEMA` 读（`validation_alias`）。不用 lite-rag 的 `alias="schema"`：在顶层 `BaseSettings` 上，pydantic-settings 会从不带前缀的 `SCHEMA` 读它、反而读不到 `LITECACHE_SCHEMA`（S0 实测） |
 | `LITECACHE_TEST_DATABASE_URL` | — | 只给测试用，测试只使用 schema `lite_cache_test` |
 
 | `LITECACHE_SEMANTIC_THRESHOLDS` | 空 | S3：JSON 对象 `{embedder model_id: threshold}`；值只能来自 §8 的校准运行，旁边在 `kb/eval-results.md` 记着 run id。仓库里的默认值文件 `src/lite_cache/thresholds.json` 收已校准的条目，环境变量覆盖它 |
