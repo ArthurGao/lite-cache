@@ -190,12 +190,15 @@ S2 的 replay 评测需要的是查询日志，那是调用方的日志，不由
 
 ## 4. 存储
 
-`Store` Protocol：`get(key, now)`、`put(entry, now)`、`invalidate(...)`、`purge_expired(now, limit)`、
-`count(...)`、`put_and_count(entry, now, day, spent=)`（`stored` 的写入和计数同一事务）、`stats(...)`。
+`Store` Protocol 只含 hook 用到的：`get(key, now)`、`put_and_count(entry, now, day, spent=)`（`stored` 的写入和计数
+同一事务）、`count(...)`、`invalidate(...)`、`stats(...)`。`PgStore` 另有 `put(entry, now)` 和 `purge_expired(now, limit)`
+（CLI 和工具用）。写入后顺手 purge，purge 失败只记 warning，不让已提交的写入报失败。
 
 PostgreSQL 实现：
 - schema 默认 `lite_cache`；migrations 是编号的 SQL 文件；执行时 `search_path = <schema>, public`。连接池里每个连接
   建立时设一次 `search_path`（pool 的 `configure`），不在每个事务里 `SET LOCAL`：每次查缓存少一次往返（S1）。
+  连接 autocommit，单条语句一次往返；连接池最多 8 个连接，取连接最多等 5 s（数据库在启动后断开时很快报
+  `StoreError`，而不是每次调用都等 30 s）。
   migration 运行器是逐字 vendor 过来的 lite-rag `db.py`（§0）。
 - `open_store()` 先不加锁地查已应用的最新版本，落后时才拿 advisory lock 执行 migrate。每个进程只
   open 一次。

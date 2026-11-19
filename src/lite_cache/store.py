@@ -23,6 +23,9 @@ log = logging.getLogger("lite_cache")
 PURGE_EVERY = timedelta(hours=1)  # writes purge expired entries at most this often (§3.3)
 PURGE_LIMIT = 1000  # ...and at most this many rows at a time
 POOL_MAX = 8  # concurrent lookups from one process (threads, Bounded)
+# Seconds a lookup waits for a pooled connection: a database gone after start fails visibly
+# and soon (§3.5), not after the pool's default 30 s on every cached call.
+POOL_TIMEOUT = 5.0
 
 COLUMNS = (
     "key, scope, role, backend, model, question, kind, payload, provenance, input_tokens, "
@@ -267,6 +270,7 @@ def open_store(settings: Settings | None = None) -> PgStore:
         url,
         min_size=1,
         max_size=POOL_MAX,
+        timeout=POOL_TIMEOUT,
         kwargs={"autocommit": True},
         configure=_search_path(settings.schema_name),
         open=True,

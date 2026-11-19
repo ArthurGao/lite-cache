@@ -58,10 +58,10 @@ class CacheHook:
         if cached is None:
             return
         policy, scope = cached
-        key = cache_key(call, scope)
         now = self._clock()
 
         def store() -> None:
+            key = cache_key(call, scope)  # inside: a request that cannot be keyed loses no reply
             reason = policy.accept(reply) if policy.accept is not None else None
             if reason is not None:
                 outcome = f"skip:{reason}"
@@ -103,7 +103,7 @@ def _entry(call: Call, reply: Reply, key: str, scope: str, policy: Policy, now: 
     if isinstance(reply, TextReply):
         kind, payload = "text", {"text": reply.text}
     else:
-        kind, payload = "structured", reply.value.model_dump(mode="json")
+        kind, payload = "structured", reply.value.model_dump(mode="json", by_alias=True)
     provenance = {f.name: getattr(reply.provenance, f.name) for f in dataclasses.fields(Provenance)}
     provenance["via"] = dict(provenance["via"])
     question = call.context.get("question")
@@ -124,22 +124,33 @@ def _entry(call: Call, reply: Reply, key: str, scope: str, policy: Policy, now: 
 
 
 def _restore(call: Call, entry: Entry) -> Reply | None:
-    """The stored reply as the call's reply type; None (a miss) when it no longer fits."""
-    provenance = Provenance(**entry.provenance)
-    if call.schema is None:
-        if entry.kind != "text":
-            return None
-        return TextReply(entry.payload["text"], provenance, entry.usage)
-    if entry.kind != "structured":
-        return None
+    """The stored reply as the call's reply type; None (a miss, logged) when it no longer fits:
+    the schema's validators changed while its JSON schema (and so the key) did not, or the row
+    was written by a version whose provenance or payload had another shape."""
     try:
+        provenance = Provenance(**entry.provenance)
+        if call.schema is None:
+            return (
+                TextReply(entry.payload["text"], provenance, entry.usage)
+                if entry.kind == "text"
+                else None
+            )
+        if entry.kind != "structured":
+            return None
         value = call.schema.model_validate(entry.payload)
     except ValidationError as exc:
-        # The schema's validators changed while its JSON schema (and so the key) did not.
         log.warning(
-            "lite-cache: a cached %s no longer validates (%s); calling the model again",
-            call.schema.__name__,
+            "lite-cache: a cached %s no longer validates (%s errors); calling the model again",
+            call.schema.__name__ if call.schema else "reply",
             exc.error_count(),
+        )
+        return None
+    except (TypeError, KeyError) as exc:
+        log.warning(
+            "lite-cache could not restore entry %s (%s: %s); calling the model again",
+            entry.key[:12],
+            type(exc).__name__,
+            exc,
         )
         return None
     return StructuredReply(value, provenance, entry.usage)

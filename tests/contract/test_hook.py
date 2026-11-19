@@ -1,8 +1,10 @@
 """`CacheHook` on a real `LiteModel` (design §2, §3, §3.2, §3.5; S1 acceptance in §11).
 Requests go to a recording transport, so a hit is "no request was sent"."""
 
+import math
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import Any
 
 import psycopg
@@ -12,12 +14,13 @@ from lite_model import (
     LiteModel,
     Provenance,
     StructuredReply,
+    TextReply,
     Truncated,
     Usage,
     call_context,
 )
 from psycopg import sql
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from lite_cache import CacheHook, InvalidScope, Policy, StoreError
 from lite_cache.keys import cache_key
@@ -172,6 +175,7 @@ def test_accept_that_raises_still_returns_the_reply(make: Make, pg: psycopg.Conn
     assert reply.text == "fresh"
     assert count_entries(pg) == 0
     assert hook.store_errors == 1
+    assert hook.stats() == []  # nothing counted
 
 
 @pytest.mark.parametrize(
@@ -330,3 +334,79 @@ def test_invalidate_through_the_hook(make: Make) -> None:
         assert not model.text("answer", ASK).cached
     assert len(up.requests) == 2
     assert isinstance(hook.stats()[0], RoleStats)
+
+
+# --- final review fixes ---
+
+
+class Aliased(BaseModel):
+    from_: str = Field(alias="from")
+
+
+def test_a_schema_with_aliases_hits(make: Make) -> None:
+    model, up, _ = make((200, completion('{"from": "Auckland"}')))
+    with call_context(scope="acme", cache=True):
+        model.structured("answer", ASK, Aliased)
+        reply = model.structured("answer", ASK, Aliased)
+    assert len(up.requests) == 1
+    assert reply.cached and reply.value.from_ == "Auckland"
+
+
+def test_a_stored_row_of_an_older_shape_is_a_miss_not_a_failure(
+    make: Make, store: PgStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    model, up, _ = make()
+    call = a_call()
+    old = Entry(
+        key=cache_key(call, "acme"),
+        scope="acme",
+        role="answer",
+        backend="ollama",
+        model="qwen3:8b",
+        question=None,
+        kind="text",
+        payload={"content": "an older payload shape"},
+        provenance={"role": "answer", "renamed_field": "x"},
+        usage=Usage(),
+        created_at=T0,
+        expires_at=None,
+    )
+    store.put(old, T0)
+    with call_context(scope="acme", cache=True):
+        reply = model.text("answer", ASK)
+    assert reply.text == "fresh" and not reply.cached
+    assert len(up.requests) == 1
+    assert "could not restore" in caplog.text
+
+
+def test_a_key_error_after_a_paid_call_keeps_the_reply(store: PgStore) -> None:
+    hook = CacheHook(store, clock=Clock())
+    call = a_call(
+        params={"temperature": math.nan},
+        context={"scope": "acme", "cache": Policy(refresh=True)},
+    )
+    reply = TextReply(
+        "paid", Provenance("answer", "ollama", "qwen3:8b", "qwen3:8b", "local", False), Usage()
+    )
+    assert hook.before(call) is None  # refresh: no key built here
+    hook.after(call, reply)  # NaN in params cannot be keyed: must not raise
+    assert hook.store_errors == 1
+
+
+def test_the_hooks_own_provenance_conversion_round_trips(store: PgStore) -> None:
+    hook = CacheHook(store, clock=Clock())
+    call = a_call(context={"scope": "acme", "cache": True})
+    provenance = Provenance(
+        "answer",
+        "litellm",
+        "smart",
+        None,
+        "api",
+        routed=True,
+        via=MappingProxyType({"x-litellm-model-id": "m1"}),
+    )
+    hook.after(call, TextReply("routed", provenance, Usage(input=3)))
+    hit = hook.before(call)
+    assert isinstance(hit, TextReply)
+    assert hit.provenance == provenance and dict(hit.provenance.via) == {"x-litellm-model-id": "m1"}
+    assert hit.usage == Usage(input=3)

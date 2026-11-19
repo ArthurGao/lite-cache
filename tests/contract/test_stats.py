@@ -108,3 +108,41 @@ def test_a_failed_purge_does_not_fail_the_write(
     assert store.get("k1", NOW) is not None
     assert [s.stored for s in store.stats()] == [1]
     assert "purge" in caplog.text
+
+
+def test_racing_stores_of_one_request_keep_one_row_and_count_both(
+    store: PgStore, pg: psycopg.Connection
+) -> None:
+    errors: list[BaseException] = []
+
+    def store_once() -> None:
+        try:
+            store.put_and_count(entry(), NOW, DAY, spent=SPENT)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=store_once) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    query = sql.SQL("SELECT count(*) FROM {}.entries").format(sql.Identifier(TEST_SCHEMA))
+    assert pg.execute(query).fetchone() == (1,)
+    assert [s.stored for s in store.stats()] == [2]
+
+
+def test_a_database_gone_after_start_fails_fast(store: PgStore) -> None:
+    from psycopg_pool import ConnectionPool
+
+    from lite_cache.store import POOL_TIMEOUT
+
+    assert store._pool.timeout == POOL_TIMEOUT <= 5
+    gone = PgStore(
+        ConnectionPool("postgresql://nobody@127.0.0.1:1/none", timeout=0.5, open=False),
+        "lite_cache_test",
+    )
+    gone._pool.open(wait=False)
+    with pytest.raises(StoreError):
+        gone.get("k1", NOW)
+    gone.close()
