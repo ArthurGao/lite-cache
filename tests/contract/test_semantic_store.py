@@ -36,11 +36,11 @@ def test_migration_two_applies_after_one(pg: psycopg.Connection) -> None:
 def test_the_nearest_entry_and_its_similarity(store: PgStore) -> None:
     for key, angle in (("a", 0.0), ("b", math.acos(0.8)), ("c", math.acos(0.1))):
         store.put(semantic(key, angle), NOW)
-    found = store.nearest("acme", "p1", "m", vec(0.0), NOW)
+    found = store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="text")
     assert found is not None
     best, similarity = found
     assert best.key == "a" and similarity == pytest.approx(1.0)
-    found = store.nearest("acme", "p1", "m", vec(math.acos(0.8)), NOW)
+    found = store.nearest("acme", "p1", "m", vec(math.acos(0.8)), NOW, role="answer", kind="text")
     assert found is not None and found[0].key == "b"
 
 
@@ -53,23 +53,48 @@ def test_only_the_same_scope_partition_and_embedder(
     store: PgStore, changes: dict[str, str]
 ) -> None:
     store.put(semantic("a", 0.0, **changes), NOW)
-    assert store.nearest("acme", "p1", "m", vec(0.0), NOW) is None
+    assert store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="text") is None
 
 
 def test_entries_without_a_vector_and_expired_ones_are_skipped(store: PgStore) -> None:
     store.put(entry("plain"), NOW)  # an L1 entry
     store.put(semantic("old", 0.0, expires_at=NOW + timedelta(seconds=5)), NOW)
-    assert store.nearest("acme", "p1", "m", vec(0.0), NOW + timedelta(seconds=10)) is None
+    assert (
+        store.nearest(
+            "acme", "p1", "m", vec(0.0), NOW + timedelta(seconds=10), role="answer", kind="text"
+        )
+        is None
+    )
 
 
 def test_a_vector_of_another_dimension_is_a_store_error(store: PgStore) -> None:
     store.put(semantic("a", 0.0), NOW)
     with pytest.raises(StoreError):
-        store.nearest("acme", "p1", "m", [1.0, 0.0], NOW)
+        store.nearest("acme", "p1", "m", [1.0, 0.0], NOW, role="answer", kind="text")
 
 
 def test_one_query_for_many_entries(store: PgStore) -> None:
     for i in range(300):
         store.put(semantic(f"k{i}", i / 300), NOW)
-    found = store.nearest("acme", "p1", "m", vec(299 / 300), NOW)
+    found = store.nearest("acme", "p1", "m", vec(299 / 300), NOW, role="answer", kind="text")
     assert found is not None and found[0].key == "k299"
+
+
+def test_a_zero_vector_is_never_the_nearest(store: PgStore) -> None:
+    # Final review: cosine with a zero vector is NaN, which PostgreSQL sorts first under DESC
+    # and Python compares as not-below any threshold: it would answer every question.
+    store.put(semantic("zero", 0.0, question_embedding=[0.0, 0.0, 0.0]), NOW)
+    assert store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="text") is None
+    store.put(semantic("far", 1.0), NOW)
+    found = store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="text")
+    assert found is not None and found[0].key == "far"
+
+
+def test_nearest_is_per_role_and_kind(store: PgStore) -> None:
+    # Final review: an L2 hit must not hand one role's (or a text) reply to another role (or a
+    # structured call); L1 keys on both through the request.
+    store.put(semantic("a", 0.0), NOW)
+    assert store.nearest("acme", "p1", "m", vec(0.0), NOW, role="graph", kind="text") is None
+    assert store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="structured") is None
+    found = store.nearest("acme", "p1", "m", vec(0.0), NOW, role="answer", kind="text")
+    assert found is not None and found[0].key == "a"

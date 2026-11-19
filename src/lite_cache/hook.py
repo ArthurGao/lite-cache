@@ -94,11 +94,20 @@ class CacheHook:
         question, partition = wanted
         vector = _embed(self._embedder, question)
         self._remember(call, vector)
-        found = self._store.nearest(scope, partition, self._embedder.model_id, vector, now)
+        found = self._store.nearest(
+            scope,
+            partition,
+            self._embedder.model_id,
+            vector,
+            now,
+            role=call.role,
+            kind="text" if call.schema is None else "structured",
+        )
         if found is None:
             return None
         entry, similarity = found
-        if similarity < self._threshold or guard(question, entry.question or "") is not None:
+        # `not >=`: a NaN similarity is a miss, never a hit
+        if not similarity >= self._threshold or guard(question, entry.question or "") is not None:
             return None
         reply = _restore(call, entry)
         if reply is not None:
@@ -182,6 +191,9 @@ def _embed(embedder: Embedder, question: str) -> list[float]:
         )
     if not all(math.isfinite(x) for x in vector):
         raise EmbedderError(f"embedder {embedder.model_id} returned values that are not finite")
+    if not any(vector):
+        # a zero vector has no direction: its cosine with anything is NaN (design §3.5)
+        raise EmbedderError(f"embedder {embedder.model_id} returned a zero vector")
     return vector
 
 

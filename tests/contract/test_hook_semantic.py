@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from lite_model import LiteModel, Message, call_context
+from pydantic import BaseModel
 
 from lite_cache import CacheHook, ConfigError, EmbedderError, Policy, StoreError
 from lite_cache.store import PgStore
@@ -25,6 +26,10 @@ VECTORS = {
     OTHER_NUMBER: 1.0,
     OTHER_NUMBER_2: 1.0 + math.acos(0.999),
 }
+
+
+class Days(BaseModel):
+    days: int | None = None  # any payload validates: the kind check must stop it
 
 
 class FakeEmbedder:
@@ -194,3 +199,56 @@ def test_a_non_finite_vector_is_an_embedder_error(store: PgStore, text: str) -> 
     with pytest.raises(EmbedderError, match="finite"):
         ask(model, text)
     assert up.requests == []
+
+
+class Zero(FakeEmbedder):
+    def embed_query(self, text: str) -> list[float]:
+        return [0.0, 0.0, 0.0]
+
+
+def test_a_zero_vector_is_an_embedder_error(store: PgStore) -> None:
+    up = Upstream()
+    model = local_model(up)
+    model.hooks.register(CacheHook(store, clock=Clock(), embedder=Zero(), thresholds=THRESHOLDS))
+    with pytest.raises(EmbedderError, match="zero"):
+        ask(model, SAME)
+    assert up.requests == []
+
+
+def test_another_role_misses(setup: Setup) -> None:
+    model, up, _, _ = setup
+    ask(model, SAME)
+    with call_context(
+        scope="acme", cache=Policy(semantic=True), question=PARAPHRASE, partition="p1"
+    ):
+        assert not model.text("graph", [Message("user", PARAPHRASE)]).cached
+    assert len(up.requests) == 2
+
+
+def test_a_text_entry_does_not_answer_a_structured_call(store: PgStore) -> None:
+    # Review Focus 5: an L2 candidate of the other kind is a miss, not a crash.
+    up = Upstream(
+        (200, completion("seven days", usage=USAGE)),
+        (200, completion('{"days": 7}', usage=USAGE)),
+    )
+    model = local_model(up)
+    model.hooks.register(
+        CacheHook(store, clock=Clock(), embedder=FakeEmbedder(), thresholds=THRESHOLDS)
+    )
+    ask(model, SAME)
+    with call_context(
+        scope="acme", cache=Policy(semantic=True), question=PARAPHRASE, partition="p1"
+    ):
+        reply = model.structured("answer", [Message("user", PARAPHRASE)], Days)
+    assert not reply.cached and reply.value.days == 7
+    assert len(up.requests) == 2
+
+
+def test_a_refresh_writes_the_vector(setup: Setup) -> None:
+    # refresh=True skips the lookup, so the write embeds the question itself; a later paraphrase
+    # then hits.
+    model, up, _, embedder = setup
+    ask(model, SAME, cache=Policy(semantic=True, refresh=True))
+    assert ask(model, PARAPHRASE).cached
+    assert len(up.requests) == 1
+    assert embedder.calls == [SAME, PARAPHRASE]

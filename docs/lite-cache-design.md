@@ -39,6 +39,7 @@
 | 2026-11-19 | L2 的公开问题对数据：PAWS（英文，约 8000 对测试）和 PAWS-X 中文（约 2000 对测试），加按 lite-rag 语料生成的领域集；不用 LCQMC、Quora QQP | PAWS 系列的许可写明"可用于任何目的"（google-research-datasets/paws 的 LICENSE），负例是专为难倒模型做的词序和词替换对抗样本；LCQMC、QQP 更接近真实提问，但查不到明确的数据许可（设计 §8 "许可不允许的不用"）。问题形式和数字 / 否定 / 实体类难负例由领域集补（用户：选最好的，中文不是最重要） |
 | 2026-11-19 | wheel 的元数据里 lite-model 写成直接 URL（`lite-model @ https://…/v0.2.1/…whl`），不用 `[tool.uv.sources]` | S1.5 的冒烟测试发现：sources 不进 wheel 的元数据，宿主单独装 lite-cache 的 wheel 时解析不到 lite-model（它不在 PyPI）。直接 URL 让 wheel 自己能装；升级 lite-model 要发新版 lite-cache，与 workspace 里"同一个 lite-model 版本"的规则一致 |
 | 2026-11-20 | L2 不上线：bge-m3 校准未得到可用阈值，`thresholds.json` 保持为空；0.2.0 不发 | 生成集在自身 dev 阈值 0.985 下 test 假命中 5/334（gate 允许约 1），0.95 时 PAWS 英文假命中 80%；阈值放到 1.000 时三份都能过 gate，但命中率 0–3%，等于 L1；现在阈值上限 0.99（`kb/eval-results.md`）。只改一个词就让答案变的问题对，余弦仍在 0.98–0.99，阈值分不开 |
+| 2026-11-20 | L2 检索还按 role 和 kind（text / structured）过滤；零向量是 `EmbedderError`，NaN 相似度不算命中 | 终审发现：只按 (scope, partition, embedder) 时，同一问题和分区下一个 role 会拿到另一个 role 的回答，structured 调用可能校验通过一份别的 schema 的 payload；零向量与任何向量的余弦是 NaN，PostgreSQL 降序把 NaN 排第一、Python 里 `NaN < t` 为假，会把一条答案发给所有问题。prompt 或 schema 的其余差别仍要由调用方编进 partition |
 
 ## 1. 概述
 
@@ -66,7 +67,7 @@ LLM 调用的响应缓存：同一个问题再次出现时，直接返回上次�
      3. refresh 为假时 store.get(key, now)：条目存在且未过期 → 计 hit，返回当初的回复
         （lite-model 标 cached=True，来源仍是当初回答的模型）
      4. [S3] L1 未命中、policy.semantic 为真、context 带了 question 和 partition →
-        embed(question) → 在 (scope, partition, embedder) 内逐行算余弦 → 最高者 ≥ 该 embedder 的阈值
+        embed(question) → 在 (scope, partition, embedder, role, kind) 内逐行算余弦 → 最高者 ≥ 该 embedder 的阈值
         → guard 通过 → 计 hit_semantic，返回那条的回复；否则把向量留给 after 写入时用（不 embed 第二次）
    lite-model 发请求；截断、空回复、不合 schema、调用失败都抛异常：不经过 after，不写、不计数
    CacheHook.after(call, reply)

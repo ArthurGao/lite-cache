@@ -65,7 +65,15 @@ class Store(Protocol):
     def get(self, key: str, now: datetime) -> Entry | None: ...
 
     def nearest(
-        self, scope: str, partition: str, embedder: str, vector: list[float], now: datetime
+        self,
+        scope: str,
+        partition: str,
+        embedder: str,
+        vector: list[float],
+        now: datetime,
+        *,
+        role: str,
+        kind: str,
     ) -> tuple[Entry, float] | None: ...
 
     def put_and_count(self, entry: Entry, now: datetime, day: date, *, spent: Usage) -> None: ...
@@ -124,10 +132,20 @@ class PgStore:
         return None if row is None else _entry(row)
 
     def nearest(
-        self, scope: str, partition: str, embedder: str, vector: list[float], now: datetime
+        self,
+        scope: str,
+        partition: str,
+        embedder: str,
+        vector: list[float],
+        now: datetime,
+        *,
+        role: str,
+        kind: str,
     ) -> tuple[Entry, float] | None:
-        """The unexpired L2 entry in exactly this scope, partition and embedder whose question
-        vector is closest (cosine) to `vector`, with its similarity; one query (design §2.4)."""
+        """The unexpired L2 entry of exactly this scope, partition, embedder, role and kind whose
+        question vector is closest (cosine) to `vector`, with its similarity; one query (design
+        §2.4). A NaN distance (a zero vector on either side) is never a candidate: PostgreSQL
+        sorts NaN first under DESC."""
         with self._connection() as conn:
             row = (
                 conn.cursor(row_factory=dict_row)
@@ -135,13 +153,17 @@ class PgStore:
                     f"SELECT {', '.join(COLUMNS)}, "
                     "1 - (question_embedding <=> %(v)s::vector) AS similarity FROM entries "
                     "WHERE scope = %(scope)s AND partition = %(partition)s "
-                    "AND embedder = %(embedder)s AND question_embedding IS NOT NULL "
+                    "AND embedder = %(embedder)s AND role = %(role)s AND kind = %(kind)s "
+                    "AND question_embedding IS NOT NULL "
+                    "AND (question_embedding <=> %(v)s::vector) <> 'NaN' "
                     f"AND {UNEXPIRED} ORDER BY similarity DESC LIMIT 1",
                     {
                         "v": vector,
                         "scope": scope,
                         "partition": partition,
                         "embedder": embedder,
+                        "role": role,
+                        "kind": kind,
                         "now": now,
                     },
                 )
