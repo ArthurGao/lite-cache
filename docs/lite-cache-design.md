@@ -437,6 +437,14 @@ FAIL，L2 保持关闭（`thresholds.json` 仍为空），按 §13.3 的约定�
 - 数字和例子：`kb/eval-results.md`。这些数字是 prompt v1（`…#0310ecea`）量的；现在的默认是 v2（§13.2）。
 - **下一次尝试 L2 的前提**（2026-11-20 owner 定）：用 v2（或更新的）prompt 重新校准——注入防护是开 L2 之前的
   必要条件，任何阈值都必须用带防护的 prompt 量出来；`-m ollama` 的注入用例要保持通过。
+- **L2 暂停，先看真实数据**（2026-11-20 owner 定）：先量真实用户里"换个说法问同一件事"有多少，再决定 L2 值不值得做。
+  - 数据来源：llm-steward 的 `retrieval_logs`（每次 `/v1/retrieve` 一行：`query`、`namespace_id`、时间），已经在记，
+    没有按时间清理，只随 erasure 删除；真实流量是 banyan → llm-steward → lite-rag `search`。lite-rag 的
+    `cache.question_log` 只记 `ask()`，真实路径不经过它，所以不用它。
+  - 做法（到时再做，replay，§8）：只读地导出某段时间的 query，算完全重复的比例（L1 的上限）和"近似问题"的比例
+    （候选，用 S3 的余弦 + verifier 粗筛，再人工看样本）；只出汇总数字，问题原文不出本机、不提交（可能含个人信息）。
+  - 比例高时：从这些真实问题里抽问题对、人工标注，代替 PAWS 作为 gate 的数据（改 §8 的 gate 数据要 owner 定），
+    再用 prompt v2 重新校准。
 - 若要再试，可选方向（都要 owner 定）：更强的判定模型；只用问题对、且人工标注过的
   评测集代替 PAWS（改 §8 的 gate 数据，不放宽阈值）。
 
