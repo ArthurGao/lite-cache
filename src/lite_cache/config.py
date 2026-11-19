@@ -24,8 +24,10 @@ OwnSchema = Annotated[
 ]
 
 
-# An L2 threshold: a cosine similarity in (0, 1], only ever from a calibration run (design §8).
-Threshold = Annotated[float, Field(gt=0, le=1)]
+# An L2 threshold: a cosine similarity in (0, 1), only ever from a calibration run (design §8).
+# Not 1: the database keeps vectors in float4, so identical questions may score just below 1 and
+# a threshold of 1 would miss them; calibration selects at most 0.99.
+Threshold = Annotated[float, Field(gt=0, lt=1)]
 
 
 class Settings(BaseSettings):

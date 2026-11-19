@@ -116,7 +116,15 @@ class CacheHook:
         return reply
 
     def _remember(self, call: Call, vector: list[float]) -> None:
-        self._vectors[id(call)] = (weakref.ref(call), vector)
+        key = id(call)
+
+        def forget(ref: "weakref.ref[Call]") -> None:
+            # the call is gone (it failed, or after() already took the vector): drop its entry,
+            # unless the id now names a newer call's entry
+            if (kept := self._vectors.get(key)) is not None and kept[0] is ref:
+                self._vectors.pop(key, None)
+
+        self._vectors[key] = (weakref.ref(call, forget), vector)
         while len(self._vectors) > 1024:
             self._vectors.popitem(last=False)
 

@@ -20,7 +20,9 @@ def test_thresholds_merge_the_packaged_table_and_the_environment(
     assert thresholds() == {**packaged, "ollama/m": 0.9}
 
 
-@pytest.mark.parametrize("raw", ['{"m": 1.5}', '{"m": 0}', '{"m": "x"}', "not json", "[0.9]"])
+@pytest.mark.parametrize(
+    "raw", ['{"m": 1.5}', '{"m": 1}', '{"m": 0}', '{"m": "x"}', "not json", "[0.9]"]
+)
 def test_bad_thresholds_are_refused(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
     monkeypatch.setenv("LITECACHE_SEMANTIC_THRESHOLDS", raw)
     with pytest.raises(ConfigError):
