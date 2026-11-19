@@ -5,10 +5,14 @@ recreate (AGENTS.md rule 7)."""
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import psycopg
 import pytest
 from psycopg import sql
+
+if TYPE_CHECKING:
+    from lite_cache.store import PgStore
 
 TEST_SCHEMA = "lite_cache_test"
 
@@ -40,3 +44,14 @@ def pg(pg_url: str) -> Iterator[psycopg.Connection]:
         conn.execute(drop)
         yield conn
         conn.execute(drop)
+
+
+@pytest.fixture
+def store(pg: psycopg.Connection, pg_url: str) -> Iterator["PgStore"]:
+    """A `PgStore` on a freshly migrated, empty `lite_cache_test` schema."""
+    from lite_cache.config import Settings
+    from lite_cache.store import open_store
+
+    opened = open_store(Settings(database_url=pg_url, schema_name=TEST_SCHEMA))
+    yield opened
+    opened.close()

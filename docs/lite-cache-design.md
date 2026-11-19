@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：设计完成，S0 未开始（2026-11-15）；2026-11-19 按 lite-model 改写接入方式，并重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。** 这是唯一记录项目状态的地方。本文是唯一的设计来源；
+**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），下一步 S1.5（发布 wheel）。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -191,10 +191,11 @@ S2 的 replay 评测需要的是查询日志，那是调用方的日志，不由
 ## 4. 存储
 
 `Store` Protocol：`get(key, now)`、`put(entry, now)`、`invalidate(...)`、`purge_expired(now, limit)`、
-`count(...)`、`stats(...)`。
+`count(...)`、`put_and_count(entry, now, day, spent=)`（`stored` 的写入和计数同一事务）、`stats(...)`。
 
 PostgreSQL 实现：
-- schema 默认 `lite_cache`；migrations 是编号的 SQL 文件；执行时 `search_path = <schema>, public`。
+- schema 默认 `lite_cache`；migrations 是编号的 SQL 文件；执行时 `search_path = <schema>, public`。连接池里每个连接
+  建立时设一次 `search_path`（pool 的 `configure`），不在每个事务里 `SET LOCAL`：每次查缓存少一次往返（S1）。
   migration 运行器是逐字 vendor 过来的 lite-rag `db.py`（§0）。
 - `open_store()` 先不加锁地查已应用的最新版本，落后时才拿 advisory lock 执行 migrate。每个进程只
   open 一次。
