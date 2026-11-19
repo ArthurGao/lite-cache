@@ -2,7 +2,6 @@
 
 import psycopg
 import pytest
-from psycopg.conninfo import conninfo_to_dict
 from typer.testing import CliRunner
 
 from lite_cache.cli import app
@@ -65,13 +64,14 @@ def test_stats_rejects_a_bad_date(env: str) -> None:
     assert "since" in result.output.lower()
 
 
-def test_config_redacts_the_password(env: str) -> None:
-    password = conninfo_to_dict(env).get("password")
-    assert password  # the test URL has one
+def test_config_redacts_the_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Its own URL: the test must not depend on whether the test database has a password.
+    monkeypatch.setenv("LITECACHE_DATABASE_URL", "postgresql://u:secret@h/db")
+    monkeypatch.setenv("LITECACHE_SCHEMA", TEST_SCHEMA)
     result = runner.invoke(app, ["config"])
     assert result.exit_code == 0, result.output
     assert "***" in result.output
-    assert str(password) not in result.output
+    assert "secret" not in result.output
     assert TEST_SCHEMA in result.output
 
 
