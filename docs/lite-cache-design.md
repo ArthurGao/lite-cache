@@ -41,6 +41,7 @@
 | 2026-11-20 | L2 不上线：bge-m3 校准未得到可用阈值，`thresholds.json` 保持为空；0.2.0 不发 | 生成集在自身 dev 阈值 0.985 下 test 假命中 5/334（gate 允许约 1），0.95 时 PAWS 英文假命中 80%；阈值放到 1.000 时三份都能过 gate，但命中率 0–3%，等于 L1；现在阈值上限 0.99（`kb/eval-results.md`）。只改一个词就让答案变的问题对，余弦仍在 0.98–0.99，阈值分不开 |
 | 2026-11-20 | L2 检索还按 role 和 kind（text / structured）过滤；零向量是 `EmbedderError`，NaN 相似度不算命中 | 终审发现：只按 (scope, partition, embedder) 时，同一问题和分区下一个 role 会拿到另一个 role 的回答，structured 调用可能校验通过一份别的 schema 的 payload；零向量与任何向量的余弦是 NaN，PostgreSQL 降序把 NaN 排第一、Python 里 `NaN < t` 为假，会把一条答案发给所有问题。prompt 或 schema 的其余差别仍要由调用方编进 partition |
 | 2026-11-20 | 发 0.2.0：S3 的代码（L2 机制，仍关）、依赖 lite-model 0.3.0；Proxy 自己缓存的回复（`reply.cached`）照样写入，但不计为花费 | 宿主升到 lite-model 0.3.0 时，lite-cache 的 wheel 必须指向同一个 lite-model URL，否则 uv 解析冲突；S3 加了公开 API（`Embedder`、`EmbedderError`、`Policy.semantic`），按 semver 是 minor。上面"0.2.0 不发"指的是带阈值、开着 L2 的发布，这一版不是 |
+| 2026-11-20 | L2 命中前加 verifier：本地 LLM 判定"两问是否同一个答案"，先用 qwen3:8b 校准，过了 gate 再看 qwen3:1.7b 能不能也过（§13） | bge-m3 校准失败的原因是只改一个词的问题对余弦仍在 0.98–0.99（§8 结果）；这类差别要读懂句子才分得开。8b 过不了时 1.7b 基本也过不了，先量 8b 省一次白跑；verifier 只在少数候选上调用，8b 的延迟可以接受 |
 
 ## 1. 概述
 
@@ -323,6 +324,7 @@ kb/          项目 KB（发现、评测数字、教训）
 | S1.5 | 发布 lite-cache v0.1.0 release wheel（README、版本号、CI 产出 wheel） | 宿主能从 wheel 安装；lite-rag 的 `cache` extra 能解析它 |
 | S2 | lite-rag 接 L1（在 lite-rag 仓库里做，按它的 stage 流程）：建索引的 `contextual` / `graph` role 与 `ask()`；`ask()` 的可选提问日志（§9） | 关闭时行为与之前等价（equivalence 测试，index 身份不变）；开启时：同一份文档第二次入库，`contextual` / `graph` 不发请求，产出的 chunk 上下文和图与第一次逐字相同；同一问题第二次 ask 不调用 LLM，回答标注缓存；换 embedding 模型后 `reindex --into` 新 kb，`contextual` / `graph` 不发请求；两个 namespace 互不命中；按 namespace invalidate 只清掉那个 namespace；`contextual` 并发大于 1 时同样命中（`call_context` 传进 `Bounded.map` 的线程）；提问日志关闭时不写文件 |
 | S3（S3a 机制 + S3b 评测） | S3a：Embedder Protocol、`Policy.semantic`、新 migration（partition / embedder / 问题向量列）、分区内余弦检索、guard、`hit_semantic` 计数、按 embedder 的阈值配置（空表时 `semantic=True` 报 `ConfigError`）。S3b：pairs 评测（PAWS 英文、PAWS-X 中文、领域生成集，§8），扫阈值、Wilson gate，过 gate 的阈值写进 `thresholds.json` | 两份 test 集各自过 gate（§8），数字记入 `kb/eval-results.md`；lookup 算出的向量直接用于写入，不再 embed 第二次；`semantic=False` 或缺 question / partition 时与 S1 行为相同；没有该 embedder 的阈值时 `ConfigError`；不同 partition、不同 scope、不同 embedder 的条目互不命中；guard 拦下数字不同 / 否定 / 实体不同的近似问题（每条规则各有触发和不触发的测试）。**结果（2026-11-20）**：S3a 全部达成；S3b 评测跑完，没有可用阈值（两份 PAWS 在 0.99 以内无阈值；1.000 能过 gate 但命中率 0–3%），L2 保持关闭，不发 0.2.0（§0）；实体不同的近似问题 guard 挡不住（§12） |
+| S3c | L2 verifier（§13）：`Verifier` Protocol 和基于 lite-model 的 `ModelVerifier`；命中路径加一步判定；pairs 评测加 verifier 结论，按 (embedder, verifier) 校准地板阈值 | 每份 test 集各自过 §8 的 gate，且命中率由 owner 看过后才写阈值；verifier 只在过了阈值和 guard 的候选上调用；verifier 自己的调用不进缓存、不触发 L2；verifier 失败是读失败（不发请求）；没有该组合的阈值时 `ConfigError` |
 | S4 | lite-rag `ask()` 接 L2（在 lite-rag 仓库里做）：`Hit` 带 `content_hash`，partition 计算，`Policy(semantic=True)` 的配置开关（默认关）；提问日志加 partition | 文档内容改了，partition 跟着变，旧答案不再被 L2 命中；同样的 chunk 换了顺序不命中；L2 命中的回答里每个 `[n]` 指向的 chunk 与当初生成时相同（引用测试）；同义问题第二次 ask 不调用 LLM，统计记为 `hit_semantic`；关闭时与 S2 行为相同 |
 | 按需 | replay 评测（有真实日志时，§8）；HTTP 服务（§7）、SQLite / Redis 后端（§0）、single-flight、verifier（cross-encoder 或 `cache.verify` role）、llm-steward（要 lite-model 0.3.0 的 `AsyncHook`）、lite-mem、Banyan（先迁到 lite-model）接入 | — |
 
@@ -340,3 +342,77 @@ kb/          项目 KB（发现、评测数字、教训）
 - ~~**公开问题对数据集的许可**~~：2026-11-19 结案：PAWS / PAWS-X 可用，LCQMC、QQP 许可不明不用（§0）。
 - ~~**lite-rag 默认的 embedder**~~：2026-11-19 确认：`ollama` 的 `bge-m3:567m`，1024 维，没有 query / document 前缀
   （lite-rag `model_profiles.py`）。S3 校准的第一个 embedder 就是它。
+
+## 13. L2 verifier（S3c，2026-11-20 设计）
+
+**为什么**：S3b 证明只靠余弦 + guard 分不开"改一个词就换了答案"的问题对（quickly/slowly、北/南半球、主任/副主任，
+余弦 0.98–0.99）。verifier 在命中之前让一个本地 LLM 读两个问题，判断它们是否同一个答案；余弦阈值退成召回的地板，
+真正的拒绝交给 verifier。
+
+**目标**：在 §8 的同一个 gate 下（每份 test 集负例 ≥ 300、难负例过半、假命中率 ≤ 0.01、Wilson 95% 上界 ≤ 0.02）
+得到可用的 L2：命中率明显高于 L1（具体多少由 owner 看数字定，不预设门槛）。
+**不做**：top-k 候选（只判最近的一条）；verifier 结果缓存；把 verifier 用在 L1 上。
+**反目标**：为了过 gate 放宽 gate；verifier 失败时静默放行；verifier 的调用自己又被缓存或走 L2（递归）。
+
+### 13.1 接口
+
+```python
+class Verifier(Protocol):
+    model_id: str                      # 决定判定的一切：backend:model、prompt 版本
+    def same_answer(self, question: str, candidate: str) -> bool: ...
+```
+
+- `CacheHook(store, clock, *, embedder=None, verifier=None, thresholds=None)`。给了 verifier 时，阈值表的 key 是
+  `"<embedder model_id>+<verifier model_id>"`（没有 verifier 时仍是 embedder 的 `model_id`，即 S3 的地板阈值不能
+  直接拿来用）；构造时查不到这个组合的阈值 → `ConfigError`（同 §3、S3a）。
+- 命中路径（§2 第 4 步）：L1 未命中 → embed → `nearest`（同 scope、partition、embedder、role、kind）→ 相似度 ≥
+  地板阈值 → guard 通过 → **`verifier.same_answer(question, entry.question)` 为真** → 计 `hit_semantic`，返回。
+  verifier 判"不同"时是 miss，调用照常发出、照常计 `stored` / `skip:*`（§3.4 每次调用只计一行）；被挡下的次数
+  记在内存计数 `hook.verifier_rejects`（同 `store_errors`）和一条 debug 日志里，不进 stats 表。verifier 自己那次
+  调用的 token 不计入 lite-cache 的 stats（那次调用没有 policy），要看由宿主看 lite-model 的 usage。
+- `ModelVerifier(model, role, *, prompt_version="v1")`：lite-cache 自带的实现，用宿主的 lite-model `Model` 和
+  宿主声明的 role（宿主在 RoleSpec 里加一个不可路由的 role，比如 `cache_verifier`，配 qwen3:8b、
+  `reasoning_effort: none`、temperature 0）。调 `model.structured(role, messages, SameAnswer)`，`SameAnswer` 只有
+  `same: bool`。`model_id` = `"<type>:<model>#<8 hex>"`：`type` 和 `model` 取自 `model.target(role)`（`type` 是
+  backend 的类型如 `ollama`，不是宿主给 backend 起的名字，所以评测和宿主算出同一个 key）；8 hex 是 prompt 文本加上
+  该 role 决定输出的参数（temperature、`reasoning_effort`、输出上限）的 canonical JSON 的 sha256 前 8 位——改模型、
+  prompt 或这些参数都会换 key，旧阈值不再适用。
+  - 递归防护：调用包在 `call_context(cache=None, question=None, partition=None)` 里——外层调用的 policy 会被
+    覆盖掉，verifier 的这次调用不缓存、不走 L2。lite-model 0.3.0 起 hook 里经同一个 `Bounded` 调模型不会死锁。
+- 故障（§3.5 的读失败）：verifier 抛错、超时、回复不合 schema → `VerifierError(StoreError)`，调用失败、不发请求，
+  和 embedder 失败一样；由调用方决定要不要关掉 L2 重试。不静默当成 miss，也不当成命中。
+
+### 13.2 prompt（v1）
+
+system：说明任务是判断"对问题 B 的正确回答，是否一定也是问题 A 的正确回答，反过来也是"；数字、否定、对象、
+范围、时间任一不同即为不同；只看问题本身，不猜答案。user：两个问题原文。输出 `{"same": true|false}`。
+英文写，适用中英文问题；prompt 文本放在 `lite_cache/verifier_prompt_v1.txt`，它的 sha256 进 `model_id`。
+
+### 13.3 校准（同 §8，加 verifier）
+
+- eval target：新的 `VerifiedPairsTarget`（S3b 的 `PairsTarget` 不动，它的缓存照样能用）。它用和宿主同一段代码
+  ——`lite_model.build` 出一个本地 Ollama 模型，`ModelVerifier` 包住它——每对问题输出余弦，**余弦 ≥ 0.80**（地板
+  网格的下限）时再输出 `same_answer`；低于 0.80 的对不调（任何地板阈值下都不会成为候选）。guard 照 S3b 在校准时
+  套用。verifier 的 `model_id` 在 `config()` 里，换 verifier 就重跑。
+- 抽样（缩短本地运行时间）：沿用 S3b 的 dev / test 切分，在每份集合的每个切分里各随机抽 1000 对（PAWS 英文、
+  PAWS-X 中文），种子固定、记进 `kb/eval-results.md`；生成集全量（897 对，S3b 按种子问题切好的 dev / test 不变）。
+  每份 test 集的负例仍 ≥ 300（PAWS 约 55% 是负例）。
+- 选阈值：dev 上，地板 `t ∈ [0.80, 0.99]` 中最低的那个，使"余弦 ≥ t 且 guard 通过且 verifier 判相同"的负例比例
+  ≤ 0.005；多份集合取最大的 `t`。test 上按 §8 判 gate，同时报每份集合的命中率、verifier 挡下的负例数、verifier
+  误挡的正例数。写阈值仍要 `--write-threshold`（owner 看过命中率后决定）。
+- 先量 qwen3:8b；三份都过 gate 时再在同样的抽样上量 qwen3:1.7b，过了就由 owner 选哪个上线（1.7b 更快）。
+- 8b 过不了 gate 时（owner 2026-11-20 定）：代码和测试照样合并，不写阈值，L2 照旧不能开，结果记进 KB；
+  lite-cache 的新版本（新公开 API，0.3.0）等有宿主要用时再发。
+- 估计：只有余弦 ≥ 0.80 的对要判，8b 每次约 0.3–1 s，合计 1–2 小时；Ollama 用 `brew services run`，跑完停。
+- qwen3 的 thinking：lite-model 的 `reasoning_effort: none` 经 Ollama 的 OpenAI 兼容接口关掉 thinking，已有实证
+  （lite-rag S17 的 qwen3:1.7b；S3b 生成数据时 qwen3:8b 的 190 多次结构化调用全部成功），不另做 spike。
+
+### 13.4 测试
+
+- 单元 / contract（假 verifier、真 PG）：verifier 只在过了阈值和 guard 的候选上调用（低于阈值、guard 拒绝时不调）；
+  判"不同"是 miss 并计 `miss_verifier`；判"相同"计 `hit_semantic`；verifier 抛错 → `VerifierError`，不发请求；
+  阈值按组合查，缺组合 → 构造时 `ConfigError`；`ModelVerifier` 的调用不缓存、不走 L2（在一个真 `LiteModel` 上，
+  外层 `Policy(semantic=True)`，断言 verifier 的那次调用 hook 看到的 policy 为空）；`model_id` 随 prompt 变。
+- `-m ollama`（opt-in）：`ModelVerifier` 对几对典型问题（同义改写、改数字、反义词、换实体）的判定。
+- 评测脚本的纯逻辑（选地板阈值要同时满足三个条件）在 `lite_cache.pairs`，单元测试。
+
