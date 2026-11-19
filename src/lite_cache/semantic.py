@@ -64,6 +64,14 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _NEGATION = re.compile(
     r"\b(?:not|cannot|no|never|none|nobody|nothing|without)\b|n't|[不没未非别无勿]", re.IGNORECASE
 )
+# Chinese words that contain a negation character but negate nothing; removed before counting
+# (2026-11-20, S3b / S3c dev data: 分别 hid a real 不; 非常, 不同, 未来 refused paraphrases).
+_NOT_NEGATING = re.compile("不同|非常|未来|分别|类别|别人|特别|区别|级别|性别|识别|无论|无线|无数")
+
+
+def negations(text: str) -> int:
+    """How many negations a question has (a count: 分别是 / 分别不是 differ by one)."""
+    return len(_NEGATION.findall(_NOT_NEGATING.sub("", text)))
 
 
 def numbers(text: str) -> list[str]:
@@ -75,6 +83,6 @@ def guard(q1: str, q2: str) -> str | None:
     """None when the two questions may share an answer; otherwise why not."""
     if numbers(q1) != numbers(q2):
         return "numbers"
-    if bool(_NEGATION.search(q1)) != bool(_NEGATION.search(q2)):
+    if negations(q1) != negations(q2):
         return "negation"
     return None
