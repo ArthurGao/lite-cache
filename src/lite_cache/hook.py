@@ -13,7 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 
-from lite_model import Provenance, Reply, StructuredReply, TextReply
+from lite_model import Provenance, Reply, StructuredReply, TextReply, Usage
 from lite_model.hooks import Call
 from pydantic import ValidationError
 
@@ -146,13 +146,16 @@ class CacheHook:
             return
         policy, scope = cached
         now = self._clock()
+        # A reply the endpoint served from its own cache (the LiteLLM Proxy's, lite-model 0.3.0)
+        # cost nothing this time: store it, but count nothing as spent.
+        spent = Usage() if reply.cached else reply.usage
 
         def store() -> None:
             key = cache_key(call, scope)  # inside: a request that cannot be keyed loses no reply
             reason = policy.accept(reply) if policy.accept is not None else None
             if reason is not None:
                 outcome = f"skip:{reason}"
-                self._store.count(now.date(), scope, call.role, outcome, spent=reply.usage)
+                self._store.count(now.date(), scope, call.role, outcome, spent=spent)
                 return
             entry = _entry(call, reply, key, scope, policy, now)
             wanted = _semantic(call, policy)
@@ -164,7 +167,7 @@ class CacheHook:
                     embedder=self._embedder.model_id,
                     question_embedding=self._vector_for(call, self._embedder, question),
                 )
-            self._store.put_and_count(entry, now, now.date(), spent=reply.usage)
+            self._store.put_and_count(entry, now, now.date(), spent=spent)
 
         self._safely("store a reply", store)
 

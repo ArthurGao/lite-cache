@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：S0–S2 完成（L1 v0.1.0 已发布，lite-rag S18 已接 L1）；S3a（L2 机制）完成；S3b 评测完成（2026-11-20）：bge-m3 + guard 过不了 gate 的可用阈值，L2 保持关闭（`thresholds.json` 为空，§0、§8）。L2 若要上线，另开阶段：命中前加 verifier。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
+**状态：S0–S2 完成（L1 v0.1.0 已发布，lite-rag S18 已接 L1）；v0.2.0（2026-11-20）：S3 代码 + lite-model 0.3.0，L2 仍关；S3a（L2 机制）完成；S3b 评测完成（2026-11-20）：bge-m3 + guard 过不了 gate 的可用阈值，L2 保持关闭（`thresholds.json` 为空，§0、§8）。L2 若要上线，另开阶段：命中前加 verifier。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -40,6 +40,7 @@
 | 2026-11-19 | wheel 的元数据里 lite-model 写成直接 URL（`lite-model @ https://…/v0.2.1/…whl`），不用 `[tool.uv.sources]` | S1.5 的冒烟测试发现：sources 不进 wheel 的元数据，宿主单独装 lite-cache 的 wheel 时解析不到 lite-model（它不在 PyPI）。直接 URL 让 wheel 自己能装；升级 lite-model 要发新版 lite-cache，与 workspace 里"同一个 lite-model 版本"的规则一致 |
 | 2026-11-20 | L2 不上线：bge-m3 校准未得到可用阈值，`thresholds.json` 保持为空；0.2.0 不发 | 生成集在自身 dev 阈值 0.985 下 test 假命中 5/334（gate 允许约 1），0.95 时 PAWS 英文假命中 80%；阈值放到 1.000 时三份都能过 gate，但命中率 0–3%，等于 L1；现在阈值上限 0.99（`kb/eval-results.md`）。只改一个词就让答案变的问题对，余弦仍在 0.98–0.99，阈值分不开 |
 | 2026-11-20 | L2 检索还按 role 和 kind（text / structured）过滤；零向量是 `EmbedderError`，NaN 相似度不算命中 | 终审发现：只按 (scope, partition, embedder) 时，同一问题和分区下一个 role 会拿到另一个 role 的回答，structured 调用可能校验通过一份别的 schema 的 payload；零向量与任何向量的余弦是 NaN，PostgreSQL 降序把 NaN 排第一、Python 里 `NaN < t` 为假，会把一条答案发给所有问题。prompt 或 schema 的其余差别仍要由调用方编进 partition |
+| 2026-11-20 | 发 0.2.0：S3 的代码（L2 机制，仍关）、依赖 lite-model 0.3.0；Proxy 自己缓存的回复（`reply.cached`）照样写入，但不计为花费 | 宿主升到 lite-model 0.3.0 时，lite-cache 的 wheel 必须指向同一个 lite-model URL，否则 uv 解析冲突；S3 加了公开 API（`Embedder`、`EmbedderError`、`Policy.semantic`），按 semver 是 minor。上面"0.2.0 不发"指的是带阈值、开着 L2 的发布，这一版不是 |
 
 ## 1. 概述
 

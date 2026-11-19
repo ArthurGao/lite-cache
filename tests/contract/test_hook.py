@@ -410,3 +410,16 @@ def test_the_hooks_own_provenance_conversion_round_trips(store: PgStore) -> None
     assert isinstance(hit, TextReply)
     assert hit.provenance == provenance and dict(hit.provenance.via) == {"x-litellm-model-id": "m1"}
     assert hit.usage == Usage(input=3)
+
+
+def test_a_proxy_cached_reply_is_stored_but_not_counted_as_spent(store: PgStore) -> None:
+    # lite-model 0.3.0: a litellm reply the Proxy served from its own cache is cached=True and
+    # still reaches after(); nothing was spent on it (lite-model design §10).
+    hook = CacheHook(store, clock=Clock())
+    call = a_call(context={"scope": "acme", "cache": True})
+    provenance = Provenance("answer", "litellm", "workhorse", "ollama_chat/qwen3:8b", "api", False)
+    hook.after(call, TextReply("from the proxy", provenance, Usage(input=100), cached=True))
+    [stats] = hook.stats()
+    assert (stats.stored, stats.spent_input_tokens) == (1, 0)
+    hit = hook.before(call)
+    assert isinstance(hit, TextReply) and hit.text == "from the proxy"
