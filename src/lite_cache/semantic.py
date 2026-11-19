@@ -43,18 +43,18 @@ def thresholds() -> dict[str, float]:
 
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 _NEGATION = re.compile(
-    r"\b(?:not|no|never|none|nobody|nothing|without)\b|n't|[不没未非别无勿]", re.IGNORECASE
+    r"\b(?:not|cannot|no|never|none|nobody|nothing|without)\b|n't|[不没未非别无勿]", re.IGNORECASE
 )
 
 
-def _numbers(text: str) -> list[str]:
+def numbers(text: str) -> list[str]:
     """Digit runs, thousands separators removed: `1,000` and `1000` are the same number."""
     return sorted(m.group(0).replace(",", "") for m in _NUMBER.finditer(text))
 
 
 def guard(q1: str, q2: str) -> str | None:
     """None when the two questions may share an answer; otherwise why not."""
-    if _numbers(q1) != _numbers(q2):
+    if numbers(q1) != numbers(q2):
         return "numbers"
     if bool(_NEGATION.search(q1)) != bool(_NEGATION.search(q2)):
         return "negation"

@@ -37,6 +37,8 @@ def test_bad_thresholds_are_refused(monkeypatch: pytest.MonkeyPatch, raw: str) -
         ("能退货吗", "不能退货吗", "negation"),
         ("Can I return it?", "Can't I return it?", "negation"),
         ("Is it free?", "Is it not free?", "negation"),
+        ("Can I keep it?", "Cannot I keep it?", "negation"),
+        ("Can I keep it?", "Can I not keep it?", "negation"),
         ("What does E4012 mean?", "What does E4013 mean?", "numbers"),
         ("same question", "same question", None),
     ],

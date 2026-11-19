@@ -18,11 +18,20 @@ dependencies = [
     "typer==0.27.3",
 ]
 
+[project.optional-dependencies]
+# The L2 pairs evaluation (design §8, S3b): lite-eval runs it, pyarrow reads the PAWS parquet files.
+eval = [
+    "lite-eval @ https://github.com/ArthurGao/lite-eval/releases/download/v0.4.1/lite_eval-0.4.1-py3-none-any.whl",
+    "pyarrow==26.0.1",
+]
+
 [project.scripts]
 litecache = "lite_cache.cli:app"
 
 [dependency-groups]
 dev = [
+    # AGENTS rule 5: lite-eval is a dev dependency too, so CI tests the eval target.
+    "lite-cache[eval]",
     "pytest>=8.3",
     "ruff>=0.8",
     "mypy>=1.13",
@@ -45,8 +54,13 @@ exclude = ["*.md"]
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "tests", "scripts"]
+files = ["src", "tests", "scripts", "eval"]
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+# pyarrow ships no type information (eval extra only).
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

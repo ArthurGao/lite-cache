@@ -29,6 +29,7 @@ eval/out/
 
 # lite-eval runs
 eval/lite-eval/runs/
+eval/lite-eval/.lite-eval/
 
 # Agent workspaces (superpowers plan ledgers)
 .superpowers/

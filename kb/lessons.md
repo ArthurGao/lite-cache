@@ -29,3 +29,25 @@ default collation is not C (`tests/contract/test_database.py` asserts that preco
 
 A mutation helper `mut() { pytest $2; }` passed `"file -k expr"` as one argument in zsh, every run
 errored, and the output looked like "nothing failed". Mutation runs now inline the full command.
+
+## A gate can pass at a useless threshold (S3b, 2026-11-20, measured)
+
+The threshold search took the negatives' own cosines as candidates without a ceiling; on PAWS-X it
+"found" 1.000, and every test set then passed with ~0 false hits — and 0–3 % hits. A PASS says
+nothing about usefulness. Check: `tests/unit/test_pairs.py::test_no_threshold_above_the_grid`
+(candidates stop at 0.99: above it is "no threshold"); `calibrate.py` writes `thresholds.json`
+only with `--write-threshold`, the owner's call after reading the hit rates.
+
+## Measure in the target only what the cache key covers (S3b, 2026-11-20, observed)
+
+The first target also output the guard's verdict, but lite-eval caches outputs by `versions()`,
+which named only the package version: a guard fix ("cannot") would have been served the old
+verdicts. The target now outputs only the cosine (it depends on the embedder alone) and
+`calibrate.py` applies the current guard, so a guard change needs no re-run. Check:
+`tests/unit/test_eval_target.py::test_a_pair_becomes_its_cosine`.
+
+## qwen3:8b invents a number to "change" (S3b, 2026-11-20, measured)
+
+Asked to change a number in a question that had none, it appended one ("… (2025)") in 150 of 161
+cases — pairs the guard refuses by construction, which ease the gate. Check:
+`tests/unit/test_pairs.py::test_a_numbers_negative_needs_a_number_in_the_seed`.

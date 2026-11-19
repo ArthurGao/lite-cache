@@ -1,0 +1,12 @@
+# L2 calibration (lite-cache design §8, S3b): the generated domain set (eval/pairs/generate.py), after the owner's spot check.
+#   uv run lite-eval run eval/lite-eval/suites/pairs-generated.yaml        # bge-m3 on the local Ollama
+# The target only measures (cosine, guard verdict) per pair; eval/pairs/calibrate.py chooses the
+# threshold on dev and gates it on test. The scorer is a shape check: every output has a cosine.
+name: pairs-generated
+dataset: ../../pairs/generated
+targets:
+  - python: lite_cache.eval_target:pairs
+    configs:
+      - {name: bge-m3, model: "bge-m3:567m", dim: 1024}
+scorers:
+  - regex: {pattern: '"cosine":-?[0-9]'}

@@ -6,7 +6,7 @@ This directory keeps what the design does not hold well.
 
 | Page | What |
 | --- | --- |
-| `eval-results.md` | lite-eval runs: L1 / L2 hit rate, false-hit rate, tokens saved, chosen thresholds (from S2) |
+| `eval-results.md` | lite-eval runs: L1 / L2 hit rate, false-hit rate, tokens saved, chosen thresholds (from S2); S3b L2 calibration (2026-11-20: L2 stays off) |
 | `lessons.md` | traps met while building it, each with the check that now catches it |
 
 Rules:

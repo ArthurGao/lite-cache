@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：S0–S1 完成（2026-11-19）：L1 精确缓存（key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、`PgStore`、CLI），S1.5 完成：v0.1.0 已发布（https://github.com/ArthurGao/lite-cache/releases/tag/v0.1.0；新项目按 URL 装 wheel，lite-model 0.2.1 随元数据解析，冒烟命中）。下一步 S2：lite-rag 接 L1。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
+**状态：S0–S2 完成（L1 v0.1.0 已发布，lite-rag S18 已接 L1）；S3a（L2 机制）完成；S3b 评测完成（2026-11-20）：bge-m3 + guard 过不了 gate 的可用阈值，L2 保持关闭（`thresholds.json` 为空，§0、§8）。L2 若要上线，另开阶段：命中前加 verifier。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -38,6 +38,7 @@
 | 2026-11-19 | 接入 lite-rag 不等 lite-model 0.3.0 | 建索引经过 `Bounded`：命中也占一个槽位，但立刻返回，吞吐几乎不变；`ask()` 不经过 `Bounded`。0.3.0 只是 llm-steward（async）接入的前置 |
 | 2026-11-19 | L2 的公开问题对数据：PAWS（英文，约 8000 对测试）和 PAWS-X 中文（约 2000 对测试），加按 lite-rag 语料生成的领域集；不用 LCQMC、Quora QQP | PAWS 系列的许可写明"可用于任何目的"（google-research-datasets/paws 的 LICENSE），负例是专为难倒模型做的词序和词替换对抗样本；LCQMC、QQP 更接近真实提问，但查不到明确的数据许可（设计 §8 "许可不允许的不用"）。问题形式和数字 / 否定 / 实体类难负例由领域集补（用户：选最好的，中文不是最重要） |
 | 2026-11-19 | wheel 的元数据里 lite-model 写成直接 URL（`lite-model @ https://…/v0.2.1/…whl`），不用 `[tool.uv.sources]` | S1.5 的冒烟测试发现：sources 不进 wheel 的元数据，宿主单独装 lite-cache 的 wheel 时解析不到 lite-model（它不在 PyPI）。直接 URL 让 wheel 自己能装；升级 lite-model 要发新版 lite-cache，与 workspace 里"同一个 lite-model 版本"的规则一致 |
+| 2026-11-20 | L2 不上线：bge-m3 校准未得到可用阈值，`thresholds.json` 保持为空；0.2.0 不发 | 生成集在自身 dev 阈值 0.985 下 test 假命中 5/334（gate 允许约 1），0.95 时 PAWS 英文假命中 80%；阈值放到 1.000 时三份都能过 gate，但命中率 0–3%，等于 L1；现在阈值上限 0.99（`kb/eval-results.md`）。只改一个词就让答案变的问题对，余弦仍在 0.98–0.99，阈值分不开 |
 
 ## 1. 概述
 
@@ -256,8 +257,9 @@ HTTP 服务（查询和写入的 HTTP 版）只在出现非 Python、又必须�
   "embedder 余弦 ≥ 阈值且 guard 通过"这一判定本身，不调用 LLM。
   - 数据来源（两份，分开评测，都要过 gate）：
     1. **公开的人工标注集**：PAWS（英文，`paws_wiki_labeled_final` 的 test）和 PAWS-X 中文（`x-final` 的 zh test），
-       两份分开判定。许可已核实（§0 2026-11-19）；LCQMC、QQP 因许可不明不用。数据集文件不提交进仓库，按需下载到临时目录
-       （同 lite-mem 的 LongMemEval 做法），下载链接和文件 sha256 记进 `kb/eval-results.md`。
+       两份分开判定（validation 作 dev，test 作 test）。许可已核实（§0 2026-11-19）；LCQMC、QQP 因许可不明不用。
+       数据从 Hugging Face 的 google-research-datasets 下载（原 storage.googleapis.com 的 tar 包已 403），
+       不提交进仓库，放在 `eval/pairs/data/`（gitignore），每个文件的 sha256 记在 `data/public/sources.json`。
     2. **按 lite-rag 语料生成的领域集**：对 lite-rag `eval/corpus*` 的文档，用 LLM 生成同义改写（正例）和
        改数字、加否定、换实体的版本（难负例），再人工抽查至少 10%。lite-eval 会标 `synthetic_dataset`，
        结果照实写"合成数据"。生成用本地模型（Ollama），不用订阅通道。
@@ -267,7 +269,14 @@ HTTP 服务（查询和写入的 HTTP 版）只在出现非 Python、又必须�
   - 数据切分：阈值和 guard 规则只在 dev 集上定，gate 只在 held-out test 集上判定，两个集合不重叠。
   - gate（每份 test 集各自判定）：负例至少 300 对，难负例占一半以上；`false_hit_rate ≤ 0.01`，且 95% Wilson
     上界 `≤ 0.02`。上界、样本数、embedder 的 `model_id`、run id 都记进 `kb/eval-results.md`；过了 gate 的
-    阈值写进 `thresholds.json`（§5）。
+    阈值写进 `thresholds.json`（§5）——但过 gate 不等于可用：阈值高到几乎不命中时也会过，所以写入要 owner 看过命中率后
+    用 `calibrate.py --write-threshold` 明确决定。
+  - 结果（2026-11-20，bge-m3:567m）：FAIL。两份 PAWS 在 [0.80, 0.99] 里没有 dev 阈值，生成集按自身 dev 阈值 0.985
+    test 假命中 5/334；L2 保持关闭（§0）。数字和分析见 `kb/eval-results.md`。
+  - 评测工具：`eval/pairs/{fetch,generate,calibrate}.py`，suite `eval/lite-eval/suites/pairs-{public,generated}.yaml`，
+    target `lite_cache.eval_target:pairs`（只输出余弦，只取决于 embedder；guard 在 `calibrate.py` 里按当前代码套用，
+    改 guard 不用重跑）；纯逻辑（切分、Wilson、选阈值、gate）在 `lite_cache.pairs`，有单元测试。阈值只在
+    [0.80, 0.99] 里选，更高的阈值几乎不命中，算"没有阈值"。
 - **replay**（按需，有真实日志时）：一份真实查询日志按时间回放。指标是 L1 的命中率、L1+L2 的命中率、省下的
   token。用来估算真实收益，不再是 L2 的前提（§0）。日志来自 lite-rag `ask()` 的可选提问日志（§9）。
 
@@ -311,7 +320,7 @@ kb/          项目 KB（发现、评测数字、教训）
 | S1 | L1：key、`CacheHook`、写入规则、TTL、invalidate、计数与 stats、PgStore、CLI | 用 lite-model 的 `FakeModel` 包在 `LiteModel` 外（或 `build` 加假 transport）：同一请求第二次不发请求，回复 `cached=True`、来源和 usage 是第一次的；scope、role、backend、model、messages、params（包括 tools、response_format、reasoning_effort）任何一项不同都不命中；没有 scope 或没有 policy 时不读不写；`structured()` 命中还原成同一个 schema 的值；`accept` 拒绝时不写入，记为 `skip:<reason>`；lite-model 抛 `Truncated` / `EmptyReply` 时不写、不计数；过期不命中；在默认 collation 不是 C 的库上，scope 前缀失效不会误删 `ab`，也不会漏删 `a/x.y`；每次调用只计一行，outcome 正确；并发 upsert 不丢计数；写失败或计数失败时仍返回回复，`store_errors` 加一，不抛错；读失败抛 `StoreError` 且不发请求；schema 为 `public` 或非法标识符时拒绝启动；canonical JSON 的 test vector 与 lite-eval 一致；`question` 不同不影响命中，传入的原文存进 `entries.question` |
 | S1.5 | 发布 lite-cache v0.1.0 release wheel（README、版本号、CI 产出 wheel） | 宿主能从 wheel 安装；lite-rag 的 `cache` extra 能解析它 |
 | S2 | lite-rag 接 L1（在 lite-rag 仓库里做，按它的 stage 流程）：建索引的 `contextual` / `graph` role 与 `ask()`；`ask()` 的可选提问日志（§9） | 关闭时行为与之前等价（equivalence 测试，index 身份不变）；开启时：同一份文档第二次入库，`contextual` / `graph` 不发请求，产出的 chunk 上下文和图与第一次逐字相同；同一问题第二次 ask 不调用 LLM，回答标注缓存；换 embedding 模型后 `reindex --into` 新 kb，`contextual` / `graph` 不发请求；两个 namespace 互不命中；按 namespace invalidate 只清掉那个 namespace；`contextual` 并发大于 1 时同样命中（`call_context` 传进 `Bounded.map` 的线程）；提问日志关闭时不写文件 |
-| S3（S3a 机制 + S3b 评测） | S3a：Embedder Protocol、`Policy.semantic`、新 migration（partition / embedder / 问题向量列）、分区内余弦检索、guard、`hit_semantic` 计数、按 embedder 的阈值配置（空表时 `semantic=True` 报 `ConfigError`）。S3b：pairs 评测（PAWS 英文、PAWS-X 中文、领域生成集，§8），扫阈值、Wilson gate，过 gate 的阈值写进 `thresholds.json` | 两份 test 集各自过 gate（§8），数字记入 `kb/eval-results.md`；lookup 算出的向量直接用于写入，不再 embed 第二次；`semantic=False` 或缺 question / partition 时与 S1 行为相同；没有该 embedder 的阈值时 `ConfigError`；不同 partition、不同 scope、不同 embedder 的条目互不命中；guard 拦下数字不同 / 否定 / 实体不同的近似问题（每条规则各有触发和不触发的测试） |
+| S3（S3a 机制 + S3b 评测） | S3a：Embedder Protocol、`Policy.semantic`、新 migration（partition / embedder / 问题向量列）、分区内余弦检索、guard、`hit_semantic` 计数、按 embedder 的阈值配置（空表时 `semantic=True` 报 `ConfigError`）。S3b：pairs 评测（PAWS 英文、PAWS-X 中文、领域生成集，§8），扫阈值、Wilson gate，过 gate 的阈值写进 `thresholds.json` | 两份 test 集各自过 gate（§8），数字记入 `kb/eval-results.md`；lookup 算出的向量直接用于写入，不再 embed 第二次；`semantic=False` 或缺 question / partition 时与 S1 行为相同；没有该 embedder 的阈值时 `ConfigError`；不同 partition、不同 scope、不同 embedder 的条目互不命中；guard 拦下数字不同 / 否定 / 实体不同的近似问题（每条规则各有触发和不触发的测试）。**结果（2026-11-20）**：S3a 全部达成；S3b 评测跑完，没有可用阈值（两份 PAWS 在 0.99 以内无阈值；1.000 能过 gate 但命中率 0–3%），L2 保持关闭，不发 0.2.0（§0）；实体不同的近似问题 guard 挡不住（§12） |
 | S4 | lite-rag `ask()` 接 L2（在 lite-rag 仓库里做）：`Hit` 带 `content_hash`，partition 计算，`Policy(semantic=True)` 的配置开关（默认关）；提问日志加 partition | 文档内容改了，partition 跟着变，旧答案不再被 L2 命中；同样的 chunk 换了顺序不命中；L2 命中的回答里每个 `[n]` 指向的 chunk 与当初生成时相同（引用测试）；同义问题第二次 ask 不调用 LLM，统计记为 `hit_semantic`；关闭时与 S2 行为相同 |
 | 按需 | replay 评测（有真实日志时，§8）；HTTP 服务（§7）、SQLite / Redis 后端（§0）、single-flight、verifier（cross-encoder 或 `cache.verify` role）、llm-steward（要 lite-model 0.3.0 的 `AsyncHook`）、lite-mem、Banyan（先迁到 lite-model）接入 | — |
 
@@ -319,7 +328,7 @@ kb/          项目 KB（发现、评测数字、教训）
 
 - ~~**L1 是否作为 llm-gateway 的中间件**~~：2026-11-19 结案，不做。lite 模块的调用都经过 lite-model，hook 就是
   必经点；gateway 只承载订阅通道的一部分流量。
-- **L2 的 guard 规则集**：数字、否定词、实体等规则，S3 用 pairs 里的难负例在 dev 集上实测后再定。
+- **L2 的 guard 规则集**：2026-11-20 实测：数字和否定词（含连写的 "cannot"）保留；dev 上试过的"纯增量"规则（一句的词全在另一句里且多出 ≥2 个）能挡掉大部分加条件的负例，但生成集 test 仍 5/334，没采用。剩下的是单词替换（反义词、实体），guard 规则挡不住；若做 L2，下一步是 verifier（§0 2026-11-20）。
 - ~~**公开问题对数据集的许可**~~：2026-11-19 结案：PAWS / PAWS-X 可用，LCQMC、QQP 许可不明不用（§0）。
 - ~~**lite-rag 默认的 embedder**~~：2026-11-19 确认：`ollama` 的 `bge-m3:567m`，1024 维，没有 query / document 前缀
   （lite-rag `model_profiles.py`）。S3 校准的第一个 embedder 就是它。
