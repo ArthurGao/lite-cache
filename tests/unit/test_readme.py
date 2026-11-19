@@ -18,8 +18,13 @@ def test_every_cli_command_is_in_the_readme() -> None:
 
 
 def test_every_setting_is_in_the_readme() -> None:
-    names = ["LITECACHE_DATABASE_URL", "LITECACHE_SCHEMA", "LITECACHE_TEST_DATABASE_URL"]
-    assert set(Settings.model_fields) == {"database_url", "schema_name"}
+    names = [
+        "LITECACHE_DATABASE_URL",
+        "LITECACHE_SCHEMA",
+        "LITECACHE_SEMANTIC_THRESHOLDS",
+        "LITECACHE_TEST_DATABASE_URL",
+    ]
+    assert set(Settings.model_fields) == {"database_url", "schema_name", "semantic_thresholds"}
     assert [n for n in names if f"`{n}`" not in README] == []
 
 

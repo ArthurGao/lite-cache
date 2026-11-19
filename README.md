@@ -96,6 +96,7 @@ litecache config                          # the settings, with the password reda
 | --- | --- | --- |
 | `LITECACHE_DATABASE_URL` | — | PostgreSQL URL (required) |
 | `LITECACHE_SCHEMA` | `lite_cache` | lite-cache's own schema; not `public`, `information_schema` or `pg_*` |
+| `LITECACHE_SEMANTIC_THRESHOLDS` | — | L2 (planned): `{"<embedder model_id>": <threshold>}` on top of the calibrated table shipped in the package; values only from a calibration run |
 | `LITECACHE_TEST_DATABASE_URL` | — | tests only; they use the schema `lite_cache_test` |
 
 ## Development

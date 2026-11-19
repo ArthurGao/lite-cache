@@ -31,10 +31,13 @@ COLUMNS = (
     "key, scope, role, backend, model, question, kind, payload, provenance, input_tokens, "
     "output_tokens, reasoning_tokens, cost_usd, created_at, expires_at"
 ).split(", ")
+# What a write sets: the read columns and the L2 ones (S3; NULL for an L1 write).
+WRITTEN = [*COLUMNS, "partition", "embedder", "question_embedding"]
 UPSERT = (
-    f"INSERT INTO entries ({', '.join(COLUMNS)}) VALUES ({', '.join(['%s'] * len(COLUMNS))}) "
-    f"ON CONFLICT (key) DO UPDATE SET ({', '.join(COLUMNS[1:])}) = "
-    f"({', '.join(f'EXCLUDED.{c}' for c in COLUMNS[1:])})"
+    f"INSERT INTO entries ({', '.join(WRITTEN)}) VALUES "
+    f"({', '.join(['%s'] * (len(WRITTEN) - 1))}, %s::vector) "
+    f"ON CONFLICT (key) DO UPDATE SET ({', '.join(WRITTEN[1:])}) = "
+    f"({', '.join(f'EXCLUDED.{c}' for c in WRITTEN[1:])})"
 )
 
 TOKENS = ("saved_input_tokens", "saved_output_tokens", "spent_input_tokens", "spent_output_tokens")
@@ -45,6 +48,8 @@ COUNT = (
     f"DO UPDATE SET n = s.n + 1, {', '.join(f'{t} = s.{t} + EXCLUDED.{t}' for t in TOKENS)}"
 )
 SUM_TOKENS = ", ".join(f"sum({t}) AS {t}" for t in TOKENS)
+
+UNEXPIRED = "(expires_at IS NULL OR expires_at > %(now)s)"  # needs the parameter `now`
 
 # A scope and everything under it: `a` matches `a` and `a/...`, not `ab`. '0' follows '/' in byte
 # order, and the C collation makes the comparison bytewise whatever the database default (§3.3).
@@ -58,6 +63,10 @@ class Store(Protocol):
     """What `CacheHook` needs from storage (design §4); `PgStore` is the implementation."""
 
     def get(self, key: str, now: datetime) -> Entry | None: ...
+
+    def nearest(
+        self, scope: str, partition: str, embedder: str, vector: list[float], now: datetime
+    ) -> tuple[Entry, float] | None: ...
 
     def put_and_count(self, entry: Entry, now: datetime, day: date, *, spent: Usage) -> None: ...
 
@@ -107,13 +116,41 @@ class PgStore:
             row = (
                 conn.cursor(row_factory=dict_row)
                 .execute(
-                    f"SELECT {', '.join(COLUMNS)} FROM entries "
-                    "WHERE key = %s AND (expires_at IS NULL OR expires_at > %s)",
-                    (key, now),
+                    f"SELECT {', '.join(COLUMNS)} FROM entries WHERE key = %(key)s AND {UNEXPIRED}",
+                    {"key": key, "now": now},
                 )
                 .fetchone()
             )
         return None if row is None else _entry(row)
+
+    def nearest(
+        self, scope: str, partition: str, embedder: str, vector: list[float], now: datetime
+    ) -> tuple[Entry, float] | None:
+        """The unexpired L2 entry in exactly this scope, partition and embedder whose question
+        vector is closest (cosine) to `vector`, with its similarity; one query (design §2.4)."""
+        with self._connection() as conn:
+            row = (
+                conn.cursor(row_factory=dict_row)
+                .execute(
+                    f"SELECT {', '.join(COLUMNS)}, "
+                    "1 - (question_embedding <=> %(v)s::vector) AS similarity FROM entries "
+                    "WHERE scope = %(scope)s AND partition = %(partition)s "
+                    "AND embedder = %(embedder)s AND question_embedding IS NOT NULL "
+                    f"AND {UNEXPIRED} ORDER BY similarity DESC LIMIT 1",
+                    {
+                        "v": vector,
+                        "scope": scope,
+                        "partition": partition,
+                        "embedder": embedder,
+                        "now": now,
+                    },
+                )
+                .fetchone()
+            )
+        if row is None:
+            return None
+        similarity = float(row.pop("similarity"))
+        return _entry(row), similarity
 
     def put(self, entry: Entry, now: datetime) -> None:
         """Write `entry`, replacing any entry under its key (no count: for tools and tests)."""
@@ -168,6 +205,7 @@ class PgStore:
         query = (
             "SELECT role, "
             "coalesce(sum(n) FILTER (WHERE outcome = 'hit'), 0) AS hits, "
+            "coalesce(sum(n) FILTER (WHERE outcome = 'hit_semantic'), 0) AS semantic_hits, "
             "coalesce(sum(n) FILTER (WHERE outcome = 'stored'), 0) AS stored, "
             "coalesce(jsonb_object_agg(substr(outcome, 6), n) "
             "FILTER (WHERE outcome LIKE 'skip:%%'), '{}') AS skips, "
@@ -207,6 +245,7 @@ def _upsert(conn: psycopg.Connection, e: Entry) -> None:
             *(e.key, e.scope, e.role, e.backend, e.model, e.question, e.kind),
             *(Jsonb(e.payload), Jsonb(e.provenance)),
             *(u.input, u.output, u.reasoning, u.cost_usd, e.created_at, e.expires_at),
+            *(e.partition, e.embedder, e.question_embedding),
         ),
     )
 
@@ -245,6 +284,7 @@ def _role_stats(row: dict[str, Any]) -> RoleStats:
         saved_output_tokens=int(row["saved_output_tokens"]),
         spent_input_tokens=int(row["spent_input_tokens"]),
         spent_output_tokens=int(row["spent_output_tokens"]),
+        semantic_hits=int(row["semantic_hits"]),
     )
 
 

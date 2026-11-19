@@ -56,7 +56,7 @@ def stats(
     rows = _with_store(lambda s: s.stats(scope=scope, since=since.date() if since else None))
     for r in rows:
         rate = "-" if r.hit_rate is None else f"{r.hit_rate:.2f}"
-        parts = [r.role, f"hits {r.hits}", f"stored {r.stored}"]
+        parts = [r.role, f"hits {r.hits}", f"semantic_hits {r.semantic_hits}", f"stored {r.stored}"]
         parts += [f"skip:{reason} {n}" for reason, n in sorted(r.skips.items())]
         parts += [
             f"hit_rate {rate}",
