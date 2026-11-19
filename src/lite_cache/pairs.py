@@ -3,6 +3,7 @@ lite-eval cases, choosing a threshold on dev and gating it on test. No lite-eval
 is unit-tested without the `eval` extra; `eval_target` and `eval/pairs/*.py` use it."""
 
 import math
+import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,6 +43,22 @@ def paws_cases(
     return cases
 
 
+def sample_by_split(
+    cases: Sequence[Mapping[str, Any]], *, per_split: int, seed: int
+) -> list[Mapping[str, Any]]:
+    """Up to `per_split` cases from each (set, split), the same ones for the same seed (design
+    §13.3: shorter local runs; every split kept apart)."""
+    groups: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
+    for case in cases:
+        groups.setdefault((case["tags"]["set"], case["tags"]["split"]), []).append(case)
+    rng = random.Random(seed)
+    picked: list[Mapping[str, Any]] = []
+    for key in sorted(groups):
+        group = sorted(groups[key], key=lambda c: str(c["id"]))
+        picked += group if len(group) <= per_split else rng.sample(group, per_split)
+    return picked
+
+
 def split_by_seed(
     cases: Sequence[Mapping[str, Any]], *, test_share: float
 ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
@@ -64,9 +81,18 @@ class Scored:
     cosine: float
     guard: str | None
     hard: bool
+    # The L2 verifier's verdict (S3c, design §13); None when there is none: a run without a
+    # verifier, or a pair below the floor grid that no threshold reaches.
+    verified: bool | None = None
+
+    @property
+    def admitted(self) -> bool:
+        """Neither the guard nor the verifier refuses it. A verdict of None passes: only right
+        while every threshold is >= GRID[0], the cosine below which the eval target asks none."""
+        return self.guard is None and self.verified is not False
 
     def hit(self, threshold: float) -> bool:
-        return self.cosine >= threshold and self.guard is None
+        return self.cosine >= threshold and self.admitted
 
 
 def wilson_upper(k: int, n: int, z: float = Z95) -> float:
@@ -88,9 +114,9 @@ def select_threshold(
     if not negatives:
         return None
     allowed = math.floor(max_false_hit_rate * len(negatives))
-    # cosines of the negatives the guard lets through, highest first: at threshold t the false
+    # cosines of the negatives the guard and the verifier let through, highest first: at t the false
     # hits are those >= t, so t must sit above the (allowed + 1)-th highest
-    passing = sorted((s.cosine for s in negatives if s.guard is None), reverse=True)
+    passing = sorted((s.cosine for s in negatives if s.admitted), reverse=True)
     floor = passing[allowed] if len(passing) > allowed else -math.inf
     candidates = sorted({*GRID, *(s.cosine for s in negatives)})
     return next((t for t in candidates if GRID[0] <= t <= GRID[-1] and t > floor), None)

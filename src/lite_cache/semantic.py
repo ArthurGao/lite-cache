@@ -26,6 +26,25 @@ class Embedder(Protocol):
     def embed_query(self, text: str) -> list[float]: ...
 
 
+class Verifier(Protocol):
+    """Judges, before an L2 candidate is a hit, whether `question` and the cached `candidate`
+    share an answer (design §13). `model_id` must cover everything that decides the verdict."""
+
+    model_id: str
+
+    def same_answer(self, question: str, candidate: str) -> bool: ...
+
+
+def key_of(embedder_id: str, verifier_id: str | None) -> str:
+    """The thresholds-table key: the embedder's `model_id`, or `"<embedder>+<verifier>"` with a
+    verifier (a floor calibrated without one does not apply with one, and the reverse)."""
+    return embedder_id if verifier_id is None else f"{embedder_id}+{verifier_id}"
+
+
+def threshold_key(embedder: Embedder, verifier: Verifier | None) -> str:
+    return key_of(embedder.model_id, None if verifier is None else verifier.model_id)
+
+
 _TABLE: TypeAdapter[dict[str, float]] = TypeAdapter(dict[str, Threshold])
 
 

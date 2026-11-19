@@ -14,8 +14,12 @@ from importlib.metadata import version
 from typing import TYPE_CHECKING, Any, Literal
 
 from lite_eval.contracts import Case, Output
+from lite_model import ModelsConfig, RolePolicy, RoleSpec, build
 
 from lite_cache.canonical import sha256_hex
+from lite_cache.pairs import GRID
+from lite_cache.semantic import Verifier
+from lite_cache.verifier import ModelVerifier
 
 if TYPE_CHECKING:
     from lite_eval.datasets.local import Dataset
@@ -88,10 +92,13 @@ class PairsTarget:
     async def setup(self, dataset: "Dataset") -> None:
         return None
 
+    async def _cosine(self, pair: dict[str, str]) -> float:
+        a, b = await asyncio.to_thread(self.embedder.embed, [pair["q1"], pair["q2"]])
+        return cosine(a, b)
+
     async def run(self, case: Case) -> Output:
         pair: dict[str, str] = case.input  # type: ignore[assignment]
-        a, b = await asyncio.to_thread(self.embedder.embed, [pair["q1"], pair["q2"]])
-        return Output(case_id=case.id, value={"cosine": cosine(a, b)})
+        return Output(case_id=case.id, value={"cosine": await self._cosine(pair)})
 
     async def teardown(self) -> None:
         return None
@@ -100,3 +107,45 @@ class PairsTarget:
 def pairs(model: str = "bge-m3:567m", dim: int = 1024) -> PairsTarget:
     """The suite's entry point (`python: lite_cache.eval_target:pairs`)."""
     return PairsTarget(model, dim)
+
+
+class VerifiedPairsTarget(PairsTarget):
+    """S3c (design §13.3): the cosine, and from the floor grid's lower end up the verifier's
+    verdict. The verifier is built as a host builds it: lite-model over local Ollama."""
+
+    name = "lite-cache-verified-pairs"
+
+    def __init__(
+        self,
+        model: str = "bge-m3:567m",
+        dim: int = 1024,
+        judge: str = "qwen3:8b",
+        *,
+        verifier: Verifier | None = None,
+    ) -> None:
+        super().__init__(model, dim)
+        if verifier is None:
+            config = ModelsConfig(
+                backend="ollama", model=judge, reasoning_effort="none", temperature=0.0
+            )
+            built = build(config, RoleSpec({"cache_verifier": RolePolicy()}))
+            verifier = ModelVerifier(built, "cache_verifier")
+        self.verifier = verifier
+
+    def config(self) -> dict[str, Any]:
+        return {**super().config(), "verifier": self.verifier.model_id}
+
+    async def run(self, case: Case) -> Output:
+        pair: dict[str, str] = case.input  # type: ignore[assignment]
+        similarity = await self._cosine(pair)
+        verdict = None
+        if similarity >= GRID[0]:
+            verdict = await asyncio.to_thread(self.verifier.same_answer, pair["q1"], pair["q2"])
+        return Output(case_id=case.id, value={"cosine": similarity, "same_answer": verdict})
+
+
+def verified_pairs(
+    model: str = "bge-m3:567m", dim: int = 1024, judge: str = "qwen3:8b"
+) -> VerifiedPairsTarget:
+    """The S3c suites' entry point (`python: lite_cache.eval_target:verified_pairs`)."""
+    return VerifiedPairsTarget(model, dim, judge)

@@ -64,3 +64,6 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Opt-in, deselected by default: `uv run pytest -m ollama` (the real Ollama on the host).
+addopts = "-m 'not ollama'"
+markers = ["ollama: talks to the real local Ollama (opt-in: uv run pytest -m ollama)"]

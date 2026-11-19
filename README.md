@@ -6,7 +6,10 @@ An LLM response cache for the lite modules. It plugs into
 instead of another model call, and the tokens it saved are counted. Semantic matching (**L2**) is
 built but off: its calibration (2026-11-20, bge-m3) found no threshold that is both safe and useful,
 so no embedder has a threshold and `CacheHook(embedder=…)` raises `ConfigError` (design §0, §8;
-numbers in `kb/eval-results.md`).
+numbers in `kb/eval-results.md`). A `Verifier` (`ModelVerifier`: a local LLM over a lite-model
+role judges whether two questions share an answer before an L2 hit, design §13) did not reach the
+gate either with qwen3:8b (2026-11-20); thresholds with a verifier are keyed
+`"<embedder>+<verifier>"`.
 
 Design and decisions: [`docs/lite-cache-design.md`](docs/lite-cache-design.md). License: Apache-2.0.
 

@@ -13,6 +13,7 @@ import pytest
 from lite_eval.contracts import Case
 
 from lite_cache.eval_target import PairsTarget, cosine, embedder_id
+from tests.helpers import FakeVerifier
 
 VECTORS = {"refund time": [1.0, 0.0], "how long is a refund": [0.8, 0.6], "1000": [0.0, 1.0]}
 
@@ -87,3 +88,27 @@ def test_cosine() -> None:
     assert cosine([3.0, 4.0], [3.0, 4.0]) == pytest.approx(1.0)
     assert cosine([1.0, 0.0], [0.0, 2.0]) == pytest.approx(0.0)
     assert cosine([1.0, 1.0], [1.0, 0.0]) == pytest.approx(math.sqrt(0.5))
+
+
+def test_the_verified_target_judges_only_from_the_floor_up(ollama: str) -> None:
+    # Review Focus 4: below 0.80 no floor reaches the pair, so no verdict is asked for.
+    from lite_cache.eval_target import VerifiedPairsTarget
+
+    judge = FakeVerifier(False)
+    target = VerifiedPairsTarget("bge-m3:567m", 2, verifier=judge)
+    target.embedder.url = ollama
+    near = asyncio.run(
+        target.run(Case(id="n", input={"q1": "refund time", "q2": "how long is a refund"}))
+    )
+    far = asyncio.run(target.run(Case(id="f", input={"q1": "refund time", "q2": "1000"})))
+    assert near.value == {"cosine": pytest.approx(0.8), "same_answer": False}
+    assert far.value == {"cosine": pytest.approx(0.0), "same_answer": None}
+    assert len(judge.calls) == 1
+
+
+def test_the_verified_config_names_embedder_and_verifier_not_the_guard() -> None:
+    # Review Focus 5: a guard change must reuse lite-eval's cached outputs.
+    from lite_cache.eval_target import VerifiedPairsTarget
+
+    target = VerifiedPairsTarget("bge-m3:567m", 1024, verifier=FakeVerifier())
+    assert target.config() == {"embedder": "ollama/bge-m3:567m", "verifier": "fake-judge"}
