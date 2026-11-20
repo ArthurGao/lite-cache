@@ -142,3 +142,50 @@ qwen3:8b above was prompt v1) through llm-gateway; `judge_backend: gateway` in
   the cache with one gateway call; `ModelVerifier` 5/5 on the `-m ollama` pairs, injection case included.
 - Cost: claude-sub ~1,500 input tokens a call (mostly the Claude CLI's own system prompt), ~4.3 s;
   gpt-sub ~1.2 s p50. PAWS / PAWS-X not run (owner chose the generated set only).
+
+## 2026-11-21 — L2 calibration, ollama/bge-m3:567m+gateway:gpt-sub#370f9979
+
+Runs: eval/lite-eval/runs/pairs-verified-public-gateway/20261120T182800231055Z-gpt-sub-b75f52, eval/lite-eval/runs/pairs-verified-generated-gateway/20261120T181556371152Z-gpt-sub-abb294  
+Commit: b033f6e (guard applied at calibration)
+
+| set | dev threshold (FHR ≤ 0.005, in [0.80, 0.99]) |
+| --- | --- |
+| generated | 0.975 |
+| paws-en | none |
+| pawsx-zh | none |
+
+**No threshold**: none holds the dev margin for paws-en, pawsx-zh.
+
+## 2026-11-21 — L2 calibration, ollama/bge-m3:567m+gateway:claude-sub#370f9979
+
+Runs: eval/lite-eval/runs/pairs-verified-public-gateway/20261120T195301064422Z-claude-sub-0ef920, eval/lite-eval/runs/pairs-verified-generated-gateway/20261120T180032466540Z-claude-sub-cdad12  
+Commit: b033f6e (guard applied at calibration)
+
+| set | dev threshold (FHR ≤ 0.005, in [0.80, 0.99]) |
+| --- | --- |
+| generated | 0.975 |
+| paws-en | none |
+| pawsx-zh | none |
+
+**No threshold**: none holds the dev margin for paws-en, pawsx-zh.
+
+### 2026-11-21 — PAWS / PAWS-X with the subscription verifiers (gpt-sub, claude-sub through llm-gateway)
+
+Same sample as qwen3:8b (`eval/pairs/data/public-sample`, 4,000 pairs; ~3,820 judged from cosine 0.80 up per
+model), prompt v2, suite `eval/lite-eval/suites/pairs-verified-public-gateway.yaml`. No floor in [0.80, 0.99]
+holds dev FHR ≤ 0.005 on either PAWS set for either model: **FAIL, L2 stays off**. False hits among all negatives
+of the split, at floor 0.99 (cosine ≥ 0.99 and guard passed and verifier "same"):
+
+| verifier | paws-en dev | paws-en test | pawsx-zh dev | pawsx-zh test | positives kept, en dev |
+| --- | --- | --- | --- | --- | --- |
+| qwen3:8b (prompt v1, 2026-11-20) | 7.7 % | 6.9 % | 4.2 % | 1.8 % | 176/180 |
+| gpt-sub | 2.7 % | 3.3 % | 2.8 % | 1.5 % | 172/180 |
+| claude-sub | 2.1 % | 3.3 % | 2.8 % | 1.8 % | 175/180 |
+
+- A stronger judge roughly halves the false hits on English PAWS, little on PAWS-X, and stays 4–6× over the
+  0.5 % dev budget. gpt-sub and claude-sub land close together, so the remaining false hits look like the
+  task (PAWS negatives are word-swapped statements whose meaning changes subtly), not a weak model.
+- Cost: gpt-sub 3,824 calls, 2.2 s mean, 1.33M input tokens; claude-sub 3,825 calls, 5.1 s mean, 5.99M input
+  tokens (the Claude CLI's own system prompt), 68 gateway 502s retried, 2 cases re-run after `CallFailed`; no 429.
+- What this rules out: "a better verifier model" alone does not open L2 on these gates. The next step stays the
+  owner's 2026-11-20 decision: measure how often real users rephrase (llm-steward `retrieval_logs`), then decide.
