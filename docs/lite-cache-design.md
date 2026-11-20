@@ -456,4 +456,8 @@ FAIL，L2 保持关闭（`thresholds.json` 仍为空），按 §13.3 的约定�
   dev 地板都是 0.975、test 假命中 2 / 2 / 3（qwen3:8b / gpt-sub / claude-sub），都 FAIL；放过的负例全是生成集里
   答案其实没变的 `scope` 对（标签噪声），更强的模型也判"相同"——这份集合分不出 verifier 的好坏。要判断强模型能不能
   救 L2，需要 PAWS 或人工标注的问题对（`kb/eval-results.md` 2026-11-21）。eval target 加了 `judge_backend`。
+- **同日 PAWS / PAWS-X**（同一份抽样，同样两个订阅模型）：两份都在 [0.80, 0.99] 找不到 dev 地板，FAIL。0.99 时 dev
+  假命中 gpt-sub 2.7 % / 2.8 %、claude-sub 2.1 % / 2.8 %（英 / 中；qwen3:8b 7.7 % / 4.2 %），英文约减半、中文改善小，
+  仍是预算 0.5 % 的 4–6 倍；两个强模型结果接近，剩下的是任务本身难。**结论：只换更强的判定模型开不了 L2**，
+  仍按"先看真实数据"的决定走（`kb/eval-results.md` 2026-11-21）。
 

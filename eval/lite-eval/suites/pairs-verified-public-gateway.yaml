@@ -1,0 +1,13 @@
+# S3c L2 verifier on subscription models through llm-gateway (2026-11-21, owner's request): PAWS (en)
+# + PAWS-X (zh), sampled, as pairs-verified-public.yaml but judged by gpt-sub / claude-sub.
+#   uv run lite-eval run eval/lite-eval/suites/pairs-verified-public-gateway.yaml [--config gpt-sub]
+# Needs `llmgw serve` (127.0.0.1:8787) and Ollama for bge-m3. Spends subscription quota (~3,800 calls each).
+name: pairs-verified-public-gateway
+dataset: ../../pairs/data/public-sample
+targets:
+  - python: lite_cache.eval_target:verified_pairs
+    configs:
+      - {name: gpt-sub, model: "bge-m3:567m", dim: 1024, judge: "gpt-sub", judge_backend: gateway}
+      - {name: claude-sub, model: "bge-m3:567m", dim: 1024, judge: "claude-sub", judge_backend: gateway}
+scorers:
+  - regex: {pattern: '"cosine":-?[0-9]'}
