@@ -121,12 +121,20 @@ class VerifiedPairsTarget(PairsTarget):
         dim: int = 1024,
         judge: str = "qwen3:8b",
         *,
+        judge_backend: str = "ollama",
         verifier: Verifier | None = None,
     ) -> None:
         super().__init__(model, dim)
         if verifier is None:
-            config = ModelsConfig(
-                backend="ollama", model=judge, reasoning_effort="none", temperature=0.0
+            # Local qwen3: thinking off, greedy. llm-gateway (a subscription profile as the
+            # judge) refuses reasoning_effort and claude-sub drops temperature: the model only.
+            local = judge_backend == "ollama"
+            config = (
+                ModelsConfig(
+                    backend="ollama", model=judge, reasoning_effort="none", temperature=0.0
+                )
+                if local
+                else ModelsConfig(backend=judge_backend, model=judge)
             )
             built = build(config, RoleSpec({"cache_verifier": RolePolicy()}))
             verifier = ModelVerifier(built, "cache_verifier")
@@ -145,7 +153,10 @@ class VerifiedPairsTarget(PairsTarget):
 
 
 def verified_pairs(
-    model: str = "bge-m3:567m", dim: int = 1024, judge: str = "qwen3:8b"
+    model: str = "bge-m3:567m",
+    dim: int = 1024,
+    judge: str = "qwen3:8b",
+    judge_backend: str = "ollama",
 ) -> VerifiedPairsTarget:
     """The S3c suites' entry point (`python: lite_cache.eval_target:verified_pairs`)."""
-    return VerifiedPairsTarget(model, dim, judge)
+    return VerifiedPairsTarget(model, dim, judge, judge_backend=judge_backend)

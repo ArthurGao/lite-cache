@@ -91,3 +91,54 @@ punctuation. qwen3:1.7b was not run (the plan: only if 8b passes).
   pass the guard; a count of negations (1 vs 2) would refuse it. Not adopted in S3c (it would not
   change the outcome); an open guard item (design §12).
 - Runs: verified-generated 897 pairs 404 s; verified-public 4000 pairs 2859 s (local, free).
+
+## 2026-11-21 — L2 calibration, ollama/bge-m3:567m+gateway:gpt-sub#370f9979
+
+Runs: eval/lite-eval/runs/pairs-verified-generated-gateway/20261120T181556371152Z-gpt-sub-abb294  
+Commit: 7e6520e (guard applied at calibration)
+
+| set | dev threshold (FHR ≤ 0.005, in [0.80, 0.99]) |
+| --- | --- |
+| generated | 0.975 |
+
+Threshold (largest of the sets): **0.975**
+
+| test set | negatives | hard | false hits | rate | Wilson 95 % upper | positives | hit rate | gate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| generated | 334 | 334 | 2 | 0.0060 | 0.0216 | 222 | 0.234 | FAIL: Wilson upper bound 0.0216 > 0.02 |
+
+Test pairs at or above the threshold: the guard refused 14 negatives; the verifier refused 11 negatives and 1 positives.
+
+## 2026-11-21 — L2 calibration, ollama/bge-m3:567m+gateway:claude-sub#370f9979
+
+Runs: eval/lite-eval/runs/pairs-verified-generated-gateway/20261120T180032466540Z-claude-sub-cdad12  
+Commit: 7e6520e (guard applied at calibration)
+
+| set | dev threshold (FHR ≤ 0.005, in [0.80, 0.99]) |
+| --- | --- |
+| generated | 0.975 |
+
+Threshold (largest of the sets): **0.975**
+
+| test set | negatives | hard | false hits | rate | Wilson 95 % upper | positives | hit rate | gate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| generated | 334 | 334 | 3 | 0.0090 | 0.0261 | 222 | 0.234 | FAIL: Wilson upper bound 0.0261 > 0.02 |
+
+Test pairs at or above the threshold: the guard refused 14 negatives; the verifier refused 10 negatives and 1 positives.
+
+### 2026-11-21 — what the subscription verifiers show (gpt-sub, claude-sub through llm-gateway)
+
+Both judged the full generated set (844 pairs from cosine 0.80 up, prompt v2 with the injection guard;
+qwen3:8b above was prompt v1) through llm-gateway; `judge_backend: gateway` in
+`eval/lite-eval/suites/pairs-verified-generated-gateway.yaml`. No errors (one gateway 502, retried).
+- All three verifiers land on the same dev floor (0.975) and the same gate result: test false hits
+  qwen3:8b 2, gpt-sub 2, claude-sub 3 of 334 (≤ 1 would pass). Above 0.975 only 13 test negatives
+  reach the verifier.
+- Every false hit, for every model, is a `scope` pair whose answer arguably does not change
+  ("杭州办公室楼顶有什么地方可以休息？" vs "…有哪些地方可以供员工休息？"; "酒店最晚什么时候取消还能全额退款？"
+  vs "…在预订后最晚…"): the label noise noted in design §13.5. Stronger models agree with each other
+  on them, so this set cannot tell verifiers apart; the gate fails on its labels, not on the judge.
+- Smoke on both profiles (scratch script, not committed): L1 served the second identical call from
+  the cache with one gateway call; `ModelVerifier` 5/5 on the `-m ollama` pairs, injection case included.
+- Cost: claude-sub ~1,500 input tokens a call (mostly the Claude CLI's own system prompt), ~4.3 s;
+  gpt-sub ~1.2 s p50. PAWS / PAWS-X not run (owner chose the generated set only).
