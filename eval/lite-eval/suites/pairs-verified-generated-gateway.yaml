@@ -1,0 +1,13 @@
+# S3c L2 verifier on subscription models through llm-gateway (2026-11-21, owner's request): the
+# generated domain set, in full, as pairs-verified-generated.yaml but judged by gpt-sub / claude-sub.
+#   uv run lite-eval run eval/lite-eval/suites/pairs-verified-generated-gateway.yaml
+# Needs `llmgw serve` (127.0.0.1:8787) and Ollama for bge-m3. Spends subscription quota.
+name: pairs-verified-generated-gateway
+dataset: ../../pairs/generated
+targets:
+  - python: lite_cache.eval_target:verified_pairs
+    configs:
+      - {name: gpt-sub, model: "bge-m3:567m", dim: 1024, judge: "gpt-sub", judge_backend: gateway}
+      - {name: claude-sub, model: "bge-m3:567m", dim: 1024, judge: "claude-sub", judge_backend: gateway}
+scorers:
+  - regex: {pattern: '"cosine":-?[0-9]'}

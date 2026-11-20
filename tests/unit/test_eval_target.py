@@ -112,3 +112,14 @@ def test_the_verified_config_names_embedder_and_verifier_not_the_guard() -> None
 
     target = VerifiedPairsTarget("bge-m3:567m", 1024, verifier=FakeVerifier())
     assert target.config() == {"embedder": "ollama/bge-m3:567m", "verifier": "fake-judge"}
+
+
+def test_the_judge_can_be_a_gateway_profile() -> None:
+    # 2026-11-21: subscription models as the verifier through llm-gateway, which refuses
+    # reasoning_effort; the default local judge keeps its settings.
+    from lite_cache.eval_target import VerifiedPairsTarget
+
+    gateway = VerifiedPairsTarget("bge-m3:567m", 1024, "gpt-sub", judge_backend="gateway")
+    local = VerifiedPairsTarget("bge-m3:567m", 1024, "qwen3:8b")
+    assert gateway.verifier.model_id.startswith("gateway:gpt-sub#")
+    assert local.verifier.model_id.startswith("ollama:qwen3:8b#")

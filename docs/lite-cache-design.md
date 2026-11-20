@@ -452,4 +452,8 @@ FAIL，L2 保持关闭（`thresholds.json` 仍为空），按 §13.3 的约定�
     再用 prompt v2 重新校准。
 - 若要再试，可选方向（都要 owner 定）：更强的判定模型；只用问题对、且人工标注过的
   评测集代替 PAWS（改 §8 的 gate 数据，不放宽阈值）。
+- **2026-11-21 订阅模型当 verifier**（gpt-sub、claude-sub 经 llm-gateway，prompt v2，只跑生成集）：三个 verifier
+  dev 地板都是 0.975、test 假命中 2 / 2 / 3（qwen3:8b / gpt-sub / claude-sub），都 FAIL；放过的负例全是生成集里
+  答案其实没变的 `scope` 对（标签噪声），更强的模型也判"相同"——这份集合分不出 verifier 的好坏。要判断强模型能不能
+  救 L2，需要 PAWS 或人工标注的问题对（`kb/eval-results.md` 2026-11-21）。eval target 加了 `judge_backend`。
 
