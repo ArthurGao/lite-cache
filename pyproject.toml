@@ -1,6 +1,6 @@
 [project]
 name = "lite-cache"
-version = "0.2.0"
+version = "0.2.1"
 description = "An LLM response cache for the lite modules: a lite-model hook over PostgreSQL"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
