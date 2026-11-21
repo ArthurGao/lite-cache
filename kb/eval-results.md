@@ -189,3 +189,20 @@ of the split, at floor 0.99 (cosine ≥ 0.99 and guard passed and verifier "same
   tokens (the Claude CLI's own system prompt), 68 gateway 502s retried, 2 cases re-run after `CallFailed`; no 429.
 - What this rules out: "a better verifier model" alone does not open L2 on these gates. The next step stays the
   owner's 2026-11-20 decision: measure how often real users rephrase (llm-steward `retrieval_logs`), then decide.
+
+## 2026-11-22 — how often would L2 fire on real traffic? (read-only, llm-steward dev DB)
+
+`scripts/measure_paraphrase.py` over `steward.retrieval_logs` (a read-only connection), distinct
+queries per namespace, ollama/bge-m3:567m, cosine of every pair inside one namespace.
+
+| Sample | Pairs | ≥ 0.90 | ≥ 0.95 | ≥ 0.98 |
+| --- | --- | --- | --- | --- |
+| 3 namespaces, 18 distinct queries | 76 | 1 | 0 | 0 |
+
+- The one pair at 0.92 is the same question in two languages ("What does the user drink in the
+  morning?" / "用户早上喝什么"): same answer. Every other pair is ≤ 0.75 (e.g. "coffee" / "coffee
+  refund" 0.74, sibling Kubernetes topics 0.66–0.75): different answers.
+- **Not enough to decide anything.** 18 queries from development use, and retrieval queries are only
+  a proxy: L2 would see kb.risk prompts (whole entry texts), which repeat as exact copies (L1), not
+  paraphrases. What it does show: on this traffic a paraphrase hit is rare, so L2 staying off costs
+  almost nothing; re-measure when llm-steward has real users (the script is read-only and re-runnable).
