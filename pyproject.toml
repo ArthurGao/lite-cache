@@ -11,7 +11,7 @@ license-files = ["LICENSE"]
 # direct URL in the metadata, not a [tool.uv.sources] entry: lite-model is not on PyPI, and the
 # wheel must install on its own (a sources entry does not reach the wheel's metadata; S1.5).
 dependencies = [
-    "lite-model @ https://github.com/ArthurGao/lite-model/releases/download/v0.5.0/lite_model-0.5.0-py3-none-any.whl",
+    "lite-model @ https://github.com/ArthurGao/lite-model/releases/download/v0.5.1/lite_model-0.5.1-py3-none-any.whl",
     "psycopg[binary,pool]==3.3.8",
     "pydantic==2.14.3",
     "pydantic-settings==2.16.2",

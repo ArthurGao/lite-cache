@@ -26,7 +26,7 @@ dependencies = ["lite-cache"]
 lite-cache = { url = "https://github.com/ArthurGao/lite-cache/releases/download/v0.3.0/lite_cache-0.3.0-py3-none-any.whl" }
 ```
 
-The wheel names its own lite-model (0.5.0, by URL), so it installs on its own. It needs
+The wheel names its own lite-model (0.5.1, by URL), so it installs on its own. It needs
 PostgreSQL with the pgvector extension available: the first migration runs
 `CREATE EXTENSION IF NOT EXISTS vector` (L2 needs it later), so if the application's role may not
 create extensions, run that once as a superuser in its database first.
