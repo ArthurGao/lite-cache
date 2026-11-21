@@ -11,13 +11,14 @@ from lite_cache.errors import (
     StoreError,
     VerifierError,
 )
-from lite_cache.hook import CacheHook
+from lite_cache.hook import AsyncCacheHook, CacheHook
 from lite_cache.semantic import Embedder, Verifier
 from lite_cache.store import PgStore, Store, open_store
 from lite_cache.types import Policy, RoleStats
 from lite_cache.verifier import ModelVerifier
 
 __all__ = [
+    "AsyncCacheHook",
     "CacheHook",
     "ConfigError",
     "Embedder",

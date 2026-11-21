@@ -23,10 +23,10 @@ lite-cache is not on PyPI. Each release attaches a wheel to its
 dependencies = ["lite-cache"]
 
 [tool.uv.sources]
-lite-cache = { url = "https://github.com/ArthurGao/lite-cache/releases/download/v0.2.1/lite_cache-0.2.1-py3-none-any.whl" }
+lite-cache = { url = "https://github.com/ArthurGao/lite-cache/releases/download/v0.3.0/lite_cache-0.3.0-py3-none-any.whl" }
 ```
 
-The wheel names its own lite-model (0.3.0, by URL), so it installs on its own. It needs
+The wheel names its own lite-model (0.5.0, by URL), so it installs on its own. It needs
 PostgreSQL with the pgvector extension available: the first migration runs
 `CREATE EXTENSION IF NOT EXISTS vector` (L2 needs it later), so if the application's role may not
 create extensions, run that once as a superuser in its database first.
@@ -46,6 +46,10 @@ with call_context(scope="acme/u42", cache=Policy(ttl_s=86_400), question="What i
 reply.cached       # True when it came from the cache
 reply.provenance   # always the model that originally answered
 ```
+
+For an `AsyncLiteModel` (`build_async`), register `AsyncCacheHook(open_store())` instead (0.3.0): the
+same rules and counters, with each store call run in a worker thread so the event loop never waits on
+PostgreSQL.
 
 Open the store once per process. Caching is the call site's decision:
 
