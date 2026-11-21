@@ -5,9 +5,11 @@ one. A call is cached only when its `call_context` has both a `scope` and a `cac
 With `Policy(semantic=True)`, a `question` and a `partition`, an L1 miss also looks for a
 similar question in that scope and partition (L2, §2 step 4)."""
 
+import asyncio
 import dataclasses
 import logging
 import math
+import threading
 import weakref
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -67,6 +69,10 @@ class CacheHook:
         # The vector a lookup made, kept for the write of the same call (no second embedding).
         # Weak references: a call that fails never reaches `after`, and must not be kept alive.
         self._vectors: OrderedDict[int, tuple[weakref.ref[Call], list[float]]] = OrderedDict()
+        # One hook serves calls from several threads (Bounded.map's workers, AsyncCacheHook's
+        # to_thread): the vector map and the counters change under this lock. Reentrant: the
+        # weakref callback `forget` can run during a garbage collection inside a locked block.
+        self._lock = threading.RLock()
         self.store_errors = 0
         self.verifier_rejects = 0  # L2 candidates the verifier judged different (design §13)
 
@@ -120,7 +126,7 @@ class CacheHook:
             return None
         reply = _restore(call, entry)
         if reply is not None:
-            self._vectors.pop(id(call), None)  # a hit: after() will not run for this call
+            self._take_vector(call)  # a hit: after() will not run for this call
             self._count_hit(call, scope, "hit_semantic", entry, now)
         return reply
 
@@ -144,7 +150,8 @@ class CacheHook:
                 f"verifier {self._verifier.model_id} returned {type(same).__name__}, not bool"
             )
         if not same:
-            self.verifier_rejects += 1
+            with self._lock:
+                self.verifier_rejects += 1
             log.debug("lite-cache: the verifier refused L2 candidate %s", key[:12])
         return same
 
@@ -154,15 +161,21 @@ class CacheHook:
         def forget(ref: "weakref.ref[Call]") -> None:
             # the call is gone (it failed, or after() already took the vector): drop its entry,
             # unless the id now names a newer call's entry
-            if (kept := self._vectors.get(key)) is not None and kept[0] is ref:
-                self._vectors.pop(key, None)
+            with self._lock:
+                if (kept := self._vectors.get(key)) is not None and kept[0] is ref:
+                    self._vectors.pop(key, None)
 
-        self._vectors[key] = (weakref.ref(call, forget), vector)
-        while len(self._vectors) > 1024:
-            self._vectors.popitem(last=False)
+        with self._lock:
+            self._vectors[key] = (weakref.ref(call, forget), vector)
+            while len(self._vectors) > 1024:
+                self._vectors.popitem(last=False)
+
+    def _take_vector(self, call: Call) -> tuple["weakref.ref[Call]", list[float]] | None:
+        with self._lock:
+            return self._vectors.pop(id(call), None)
 
     def _vector_for(self, call: Call, embedder: Embedder, question: str) -> list[float]:
-        kept = self._vectors.pop(id(call), None)
+        kept = self._take_vector(call)
         if kept is not None and kept[0]() is call:
             return kept[1]
         return _embed(embedder, question)  # no lookup ran (refresh=True): embed for the write
@@ -219,7 +232,8 @@ class CacheHook:
         try:
             action()
         except Exception as exc:
-            self.store_errors += 1
+            with self._lock:
+                self.store_errors += 1
             log.warning("lite-cache could not %s: %s: %s", what, type(exc).__name__, exc)
 
 
@@ -312,3 +326,55 @@ def _restore(call: Call, entry: Entry) -> Reply | None:
         )
         return None
     return StructuredReply(value, provenance, entry.usage)
+
+
+class AsyncCacheHook:
+    """`CacheHook` for an `AsyncLiteModel` (lite-model `AsyncHook`; design §9, llm-steward). The
+    rules, the store and every counter are `CacheHook`'s: each `before` / `after` runs the sync
+    hook in a worker thread (`asyncio.to_thread`), so a PostgreSQL round trip never blocks the
+    event loop. `to_thread` copies the caller's contextvars, so `call_context` (and the verifier's
+    own, design §13) holds in that thread. A native async store is not needed for an L1 lookup
+    (one indexed SELECT); it would duplicate `PgStore` (design §9). The counters and admin calls
+    below only forward to `sync`: a counter added to `CacheHook` is added here too."""
+
+    name = CacheHook.name
+
+    def __init__(
+        self,
+        store: Store,
+        clock: Callable[[], datetime] = _utcnow,
+        *,
+        embedder: Embedder | None = None,
+        verifier: Verifier | None = None,
+        thresholds: Mapping[str, float] | None = None,
+    ) -> None:
+        self.sync = CacheHook(
+            store, clock, embedder=embedder, verifier=verifier, thresholds=thresholds
+        )
+
+    async def before(self, call: Call) -> Reply | None:
+        if _cached(call) is None:  # nothing to read: no thread hop for an uncached call
+            return None
+        return await asyncio.to_thread(self.sync.before, call)
+
+    async def after(self, call: Call, reply: Reply) -> None:
+        if _cached(call) is not None:
+            await asyncio.to_thread(self.sync.after, call, reply)
+
+    @property
+    def store_errors(self) -> int:
+        return self.sync.store_errors
+
+    @property
+    def verifier_rejects(self) -> int:
+        return self.sync.verifier_rejects
+
+    def invalidate(
+        self, *, scope: str | None = None, role: str | None = None, key: str | None = None
+    ) -> int:
+        """`CacheHook.invalidate`; a sync call (an admin action, not a request path)."""
+        return self.sync.invalidate(scope=scope, role=role, key=key)
+
+    def stats(self, *, scope: str | None = None, since: date | None = None) -> list[RoleStats]:
+        """`CacheHook.stats`; a sync call."""
+        return self.sync.stats(scope=scope, since=since)

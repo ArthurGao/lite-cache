@@ -1,6 +1,6 @@
 # lite-cache 设计文档
 
-**状态：S0–S2 完成（L1 v0.1.0 已发布，lite-rag S18 已接 L1）；v0.2.0（2026-11-20）：S3 代码 + lite-model 0.3.0，L2 仍关；v0.2.1（2026-11-20）：pgvector 固定装进 `public`（§12 跨仓库体检记录）；S3a（L2 机制）完成；S3b 评测完成（2026-11-20）：bge-m3 + guard 过不了 gate 的可用阈值，L2 保持关闭（`thresholds.json` 为空，§0、§8）。S3c（verifier，2026-11-20）：qwen3:8b verifier 也过不了 gate（PAWS 在 0.99 时假命中仍 4–8%），L2 保持关闭（§13.5）。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
+**状态：S0–S2 完成（L1 v0.1.0 已发布，lite-rag S18 已接 L1）；v0.2.0（2026-11-20）：S3 代码 + lite-model 0.3.0，L2 仍关；v0.2.1（2026-11-20）：pgvector 固定装进 `public`（§12 跨仓库体检记录）；S3a（L2 机制）完成；S3b 评测完成（2026-11-20）：bge-m3 + guard 过不了 gate 的可用阈值，L2 保持关闭（`thresholds.json` 为空，§0、§8）。S3c（verifier，2026-11-20）：qwen3:8b verifier 也过不了 gate（PAWS 在 0.99 时假命中仍 4–8%），L2 保持关闭（§13.5）。S5（2026-11-21）：`AsyncCacheHook`（llm-steward 用，§9），v0.3.0。** 2026-11-19 重排阶段：L1 接 lite-rag 建索引和 `ask()` 两条路径，L2 先用问题对评测校准、不等回放（§0、§11）。
 与代码冲突时，在同一次改动里更新本文，并在 commit 里说明原因。
 
 ## 0. 决策记录
@@ -290,7 +290,7 @@ HTTP 服务（查询和写入的 HTTP 版）只在出现非 Python、又必须�
 | --- | --- | --- |
 | lite-rag | 以 `cache` extra 提供（release wheel，默认关）。前置：`build_model` 暴露 `LiteModel`（或一个注册 hook 的入口）；`Completion` / `Answer` 带上 `cached`（现在 `Completion` 只有 text、model_id、usage，`llm.py:44-49`），否则 S2 的"回答标注缓存"无从做起。**S2，L1 两条路径**：① 建索引的 `contextual` / `graph` role，`call_context(scope="literag/<namespace>", cache=Policy())` 包住这两个 role 的调用（不传 `question`）；② `ask()` 的 `answer` role，scope 同样是 `literag/<namespace>`（key 里有检索到的 chunk 原文，同一租户两个 kb 检索到相同 chunk 时答案相同），传 `question`。scope 不到用户：`ask()` 只依据 kb 文档回答，没有个人化内容。`Bounded.map` 的工作线程不继承 contextvar（lite-model 0.2.1），lite-rag 的 `BoundedLLM.map` 自己按项 `copy_context()`，lite-model 0.3.0 修根上。`ask()` 加可选的提问日志（JSONL：时间、scope、question；S4 起加 partition），默认关，给以后的 replay 用。**S4，L2 只给 `ask()`**：`Policy(semantic=True)`，partition 是送进模型的检索结果按顺序的 `chunk_id@content_hash` 列表的 sha256（§0 方案 A，顺序不同也不命中）；前置：`Hit` 带上所属文档的 `content_hash`（`chunk_id` 在文档改动后不变，现在还没有）。截断已由 lite-model 报错，不再需要 `finish_reason`。每个阶段开始前，按 lite-rag 的实际流程写出 adapter 契约（scope、question、partition 从哪来） | S2、S4 |
 | lite-eval | pairs 评测（S3）；replay 评测（按需） | S3、按需 |
-| llm-steward | `kb.risk` / `kb.worthiness` 用 L1。steward 是 async 的：需要 lite-model 的 `AsyncHook`（lite-model §10，计划 0.3.0），同步 hook 里的 psycopg 查询会阻塞 event loop | 以后 |
+| llm-steward | `kb.risk` / `kb.worthiness` 用 L1。steward 是 async 的，所以用 `AsyncCacheHook`（S5，v0.3.0）：lite-model `AsyncHook`，每次 `before` / `after` 用 `asyncio.to_thread` 在工作线程里跑同步的 `CacheHook`，psycopg 查询不阻塞 event loop；`to_thread` 复制 contextvars，`call_context` 和 verifier 自己的 context 照样生效。不另写 async 的 store：L1 一次查找就是一条走索引的 SELECT，线程池足够，另写一份会和 `PgStore` 重复。一个 hook 同时被多个线程用（`Bounded.map`、`to_thread`），所以向量表和计数器放在一把可重入锁下（弱引用回调可能在加锁的代码里因 GC 触发） | S5（库）；接入在 llm-steward P10 |
 | lite-mem | extract / resolve 只用 L1，让重试不重复花钱；不用 L2；评测时不传 policy | 以后 |
 
 ## 10. 项目结构
@@ -300,7 +300,7 @@ src/lite_cache/
   types.py     Policy / RoleStats
   canonical.py 从 lite-eval vendor 过来
   keys.py      cache_key(call)
-  hook.py      CacheHook（lite-model Hook；async 版本等 lite-model 0.3.0，llm-steward 接入时）
+  hook.py      CacheHook（lite-model Hook）、AsyncCacheHook（AsyncHook，S5）
   semantic.py  S3：Embedder Protocol、分区内检索、guard
   thresholds.json  S3：按 embedder 已校准的阈值（§5）
   config.py    Settings（LITECACHE_）
@@ -326,6 +326,7 @@ kb/          项目 KB（发现、评测数字、教训）
 | S2 | lite-rag 接 L1（在 lite-rag 仓库里做，按它的 stage 流程）：建索引的 `contextual` / `graph` role 与 `ask()`；`ask()` 的可选提问日志（§9） | 关闭时行为与之前等价（equivalence 测试，index 身份不变）；开启时：同一份文档第二次入库，`contextual` / `graph` 不发请求，产出的 chunk 上下文和图与第一次逐字相同；同一问题第二次 ask 不调用 LLM，回答标注缓存；换 embedding 模型后 `reindex --into` 新 kb，`contextual` / `graph` 不发请求；两个 namespace 互不命中；按 namespace invalidate 只清掉那个 namespace；`contextual` 并发大于 1 时同样命中（`call_context` 传进 `Bounded.map` 的线程）；提问日志关闭时不写文件 |
 | S3（S3a 机制 + S3b 评测） | S3a：Embedder Protocol、`Policy.semantic`、新 migration（partition / embedder / 问题向量列）、分区内余弦检索、guard、`hit_semantic` 计数、按 embedder 的阈值配置（空表时 `semantic=True` 报 `ConfigError`）。S3b：pairs 评测（PAWS 英文、PAWS-X 中文、领域生成集，§8），扫阈值、Wilson gate，过 gate 的阈值写进 `thresholds.json` | 两份 test 集各自过 gate（§8），数字记入 `kb/eval-results.md`；lookup 算出的向量直接用于写入，不再 embed 第二次；`semantic=False` 或缺 question / partition 时与 S1 行为相同；没有该 embedder 的阈值时 `ConfigError`；不同 partition、不同 scope、不同 embedder 的条目互不命中；guard 拦下数字不同 / 否定 / 实体不同的近似问题（每条规则各有触发和不触发的测试）。**结果（2026-11-20）**：S3a 全部达成；S3b 评测跑完，没有可用阈值（两份 PAWS 在 0.99 以内无阈值；1.000 能过 gate 但命中率 0–3%），L2 保持关闭，不发 0.2.0（§0）；实体不同的近似问题 guard 挡不住（§12） |
 | S3c | L2 verifier（§13）：`Verifier` Protocol 和基于 lite-model 的 `ModelVerifier`；命中路径加一步判定；pairs 评测加 verifier 结论，按 (embedder, verifier) 校准地板阈值 | 每份 test 集各自过 §8 的 gate，且命中率由 owner 看过后才写阈值；verifier 只在过了阈值和 guard 的候选上调用；verifier 自己的调用不进缓存、不触发 L2；verifier 失败是读失败（不发请求）；没有该组合的阈值时 `ConfigError` |
+| S5 | `AsyncCacheHook`（§9 llm-steward 一行）：同步 hook 跑在 `asyncio.to_thread` 里；共享状态加锁；v0.3.0 | `tests/contract/test_hook_async.py`（真 PG，真 `AsyncLiteModel`）：第二次相同调用不发请求、来源不变、计数；scope 不共享；结构化回复；无 policy 不缓存；store 调用不在 event loop 线程上；读失败时不发请求；写失败照样返回回复并计入 `store_errors`；工作线程看得到调用方的 contextvar；同步模型拒绝它；构造检查与 `CacheHook` 相同 |
 | S4 | lite-rag `ask()` 接 L2（在 lite-rag 仓库里做）：`Hit` 带 `content_hash`，partition 计算，`Policy(semantic=True)` 的配置开关（默认关）；提问日志加 partition | 文档内容改了，partition 跟着变，旧答案不再被 L2 命中；同样的 chunk 换了顺序不命中；L2 命中的回答里每个 `[n]` 指向的 chunk 与当初生成时相同（引用测试）；同义问题第二次 ask 不调用 LLM，统计记为 `hit_semantic`；关闭时与 S2 行为相同 |
 | 按需 | replay 评测（有真实日志时，§8）；HTTP 服务（§7）、SQLite / Redis 后端（§0）、single-flight、verifier（cross-encoder 或 `cache.verify` role）、llm-steward（要 lite-model 0.3.0 的 `AsyncHook`）、lite-mem、Banyan（先迁到 lite-model）接入 | — |
 

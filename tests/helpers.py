@@ -5,7 +5,16 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from lite_model import LiteModel, Message, ModelsConfig, RolePolicy, RoleSpec, build
+from lite_model import (
+    AsyncLiteModel,
+    LiteModel,
+    Message,
+    ModelsConfig,
+    RolePolicy,
+    RoleSpec,
+    build,
+    build_async,
+)
 from lite_model.hooks import Call
 
 from tests.upstream import Upstream
@@ -18,6 +27,12 @@ ASK = (Message("user", "Hi?"),)
 def local_model(up: Upstream, **config: Any) -> LiteModel:
     """A real LiteModel on local Ollama defaults whose requests go to `up` (no network)."""
     return build(ModelsConfig.model_validate(LOCAL | config), ROLES, http_client=up.client())
+
+
+def async_local_model(up: Upstream, **config: Any) -> AsyncLiteModel:
+    """`local_model` for asyncio callers (AsyncCacheHook)."""
+    config_ = ModelsConfig.model_validate(LOCAL | config)
+    return build_async(config_, ROLES, http_client=up.async_client())
 
 
 def a_call(
