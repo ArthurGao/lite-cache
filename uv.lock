@@ -215,7 +215,7 @@ wheels = [
 
 [[package]]
 name = "lite-cache"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "lite-model" },
@@ -242,7 +242,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "lite-eval", marker = "extra == 'eval'", url = "https://github.com/ArthurGao/lite-eval/releases/download/v0.4.1/lite_eval-0.4.1-py3-none-any.whl" },
-    { name = "lite-model", url = "https://github.com/ArthurGao/lite-model/releases/download/v0.7.0/lite_model-0.7.0-py3-none-any.whl" },
+    { name = "lite-model", url = "https://github.com/ArthurGao/lite-model/releases/download/v0.8.0/lite_model-0.8.0-py3-none-any.whl" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = "==3.3.8" },
     { name = "pyarrow", marker = "extra == 'eval'", specifier = "==26.0.1" },
     { name = "pydantic", specifier = "==2.14.3" },
@@ -295,8 +295,8 @@ provides-extras = ["ranking", "server"]
 
 [[package]]
 name = "lite-model"
-version = "0.7.0"
-source = { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.7.0/lite_model-0.7.0-py3-none-any.whl" }
+version = "0.8.0"
+source = { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.8.0/lite_model-0.8.0-py3-none-any.whl" }
 dependencies = [
     { name = "openai" },
     { name = "pydantic" },
@@ -304,7 +304,7 @@ dependencies = [
     { name = "typer" },
 ]
 wheels = [
-    { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.7.0/lite_model-0.7.0-py3-none-any.whl", hash = "sha256:f7bb36c5f3f48cc88ce6b4f6b2b7b6f97c937c96105d89033cbbf35a54e9782f" },
+    { url = "https://github.com/ArthurGao/lite-model/releases/download/v0.8.0/lite_model-0.8.0-py3-none-any.whl", hash = "sha256:f290677eccc9308fd6045c86ec21ededc269d4149b1fed895b18f06110c86af5" },
 ]
 
 [package.metadata]
