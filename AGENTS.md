@@ -58,7 +58,7 @@ uv run litecache migrate | stats | invalidate | purge | config
    once (write it first, or break the line under test and watch it fail).
 2. Definition of done: ruff, mypy, tests pass; acceptance items covered by tests; design updated if
    behaviour changed.
-3. Conventional Commits (`feat(cache): …`). All code-facing text in English. No commit without the
+3. Conventional Commits (`feat(cache): …`). All code-facing text and docs (design doc, README, plans, comments) in English; Chinese only as examples or test data. No commit without the
    owner's go-ahead for that commit.
 4. **Stage close-out — every stage, after its code passes the checks, before its commit and before the
    next stage starts:**
